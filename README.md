@@ -5,7 +5,7 @@ Photomap is a collaborative, location-based photo mapping web application for fi
 
 ## Features
 
-- Independent per-region map pages (`/yurihonjo`, `/nikaho`); each page shows only its own region's photos and has no links to other regions
+- Independent per-region map pages (`/yurihonjo`, `/nikaho`, ...); the Google Drive `Photomap` folder is the source of truth: each direct subfolder is a valid region URL (via the Cloud Run `GET /regions`), so a new folder works without redeploying and unknown URLs show "region not found". The list is used only to validate URLs. There are no tabs, region lists or other links to other regions; each page shows only its own region's photos
 - Responsive map and photo-list workspace
 - Google Maps JavaScript API integration (optional during local development)
 - GitHub Pages SPA fallback for direct links and page reloads
@@ -49,6 +49,7 @@ To enable the interactive map, create `frontend/.env.local`:
 
 ```dotenv
 VITE_BASE_PATH=/
+VITE_API_BASE_URL=https://photomap-api-506452568070.asia-northeast1.run.app
 VITE_GOOGLE_MAPS_API_KEY=your-browser-api-key
 # Optional: VITE_GOOGLE_MAPS_MAP_ID=your-map-id
 ```
@@ -77,9 +78,15 @@ The browser key in `VITE_FIREBASE_API_KEY` may be restricted to the HTTP referre
 
 ### Firestore data model
 
-`regions/{slug}` (document ID equals the slug): `name`, `slug`, `prefecture`, `defaultCenter` (`{lat, lng}`), `defaultZoom`, `sortOrder`, optional `driveFolderId`, `createdAt`, `updatedAt`. The app merges the built-in defaults (Yurihonjo, Nikaho) with Firestore `regions` by slug, Firestore taking precedence. Any region document in Firestore (including previously stored ones such as `akita` or `noshiro`) stays reachable at `/<slug>`, but no page links to it. Unknown slugs show a "region not found" message.
+`regions/{slug}` (document ID equals the slug): `name`, `slug`, `prefecture`, `defaultCenter` (`{lat, lng}`), `defaultZoom`, `sortOrder`, optional `driveFolderId`, `createdAt`, `updatedAt`.
 
-Planned (not implemented yet): each direct subfolder of the Drive parent folder `17pp81R43EeQOIpaOtNR0IAIRldykz-Fq` is a region, and the Cloud Run backend will sync that folder list into `regions` so a new folder gets a working URL. Until the backend exists, add a region manually by creating a `regions/<slug>` document in the Firebase Console. Note that `regions` is publicly readable, so `driveFolderId` is visible to clients; the folder itself stays private.
+**Which region URLs are valid is decided by Google Drive, not Firestore.** The frontend calls the public `GET /regions` of the Cloud Run API (set `VITE_API_BASE_URL`); each valid direct subfolder of the Drive parent folder `17pp81R43EeQOIpaOtNR0IAIRldykz-Fq` is a region and the folder name is its slug (`^[a-z0-9]+(-[a-z0-9]+)*$`). The list is used only to decide whether `/<slug>` exists; it is never rendered as a region list or menu. `/` redirects to `/yurihonjo`. The display name and initial map position of the current region are resolved as: built-in values for `yurihonjo` (由利本荘) and `nikaho` (にかほ) → the Firestore `regions/<slug>` document (display metadata only) → the folder name with a prefecture-wide map. A `regions` document whose folder is not in Drive (e.g. `akita`, `noshiro`) does not make that URL valid, and nothing in Firestore is deleted or modified.
+
+When `GET /regions` fails, the backend serves its last successful list for up to 24 hours, and the browser falls back to the last list it received (kept in `localStorage`), then to the built-in regions, so a Drive outage never makes valid URLs disappear. An empty successful response is treated as "no regions". If `VITE_API_BASE_URL` is unset, only the built-in regions are available.
+
+Removing or renaming a Drive folder only hides that region's page; its `photos` documents (which reference the old slug in `regionId`) are never deleted and reappear if a folder with the same name returns. Renaming a folder therefore orphans the old photos until a migration is done on purpose. Unknown slugs show a "region not found" message.
+
+Planned (not implemented yet): the Cloud Run backend will also sync the Drive folder list into Firestore `regions` (folder IDs, ordering). Today the Drive list is read live from `GET /regions` and Firestore `regions` documents are optional display metadata for new folders. Note that `regions` is publicly readable, so `driveFolderId` is visible to clients; the folder itself stays private.
 
 `photos/{photoId}`: `regionId` (a region slug), `driveFileId`, `originalFilename`, `mimeType`, `latitude`, `longitude`, `capturedAt` (Timestamp), `capturedAtTimeZoneKnown` (boolean; `false` when EXIF has no offset), `uploadedAt` (Timestamp), `uploaderUid`, `uploaderName`, `width`, `height`, `hasGps`, `locationSource` (`exif` | `manual`), optional `thumbnailDriveFileId`. Markers are drawn only when `hasGps` is `true` and both coordinates are numbers.
 
@@ -103,6 +110,7 @@ The workflow builds `frontend/` and deploys on every push to `main`. In the repo
 - `VITE_GOOGLE_MAPS_API_KEY`: restricted browser API key (optional; map setup prompt is shown when unset)
 - `VITE_GOOGLE_MAPS_MAP_ID`: optional Google Maps map ID
 - `VITE_BASE_PATH`: `/photomap/` for the project site; use `/` when deploying on a root domain
+- `VITE_API_BASE_URL`: Cloud Run API base URL (defaults in the workflow to `https://photomap-api-506452568070.asia-northeast1.run.app`)
 - `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`, `VITE_FIREBASE_MESSAGING_SENDER_ID` (optional): Firebase Web app config
 
 The workflow defaults `VITE_BASE_PATH` to `/photomap/`. `frontend/vite.config.ts` uses this value as Vite's asset base, and React Router uses the same base as its basename. The `404.html` fallback preserves region routes on direct navigation and reloads. On a future custom root domain, set `VITE_BASE_PATH` to `/` and add that domain to the Maps API key's referrer restrictions.

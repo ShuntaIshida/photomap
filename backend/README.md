@@ -10,14 +10,14 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。現段階の�
 | --- | --- | --- | --- |
 | 公開 | `GET /health` | なし | ヘルスチェック |
 | 公開（stateで保護） | `GET /oauth/google/callback` | 管理者が開始時に発行した1回限りの`state` | Googleからのリダイレクト受け口 |
-| ログイン済み | `GET /regions` | Firebase IDトークン | Drive直下フォルダー由来の地域slug一覧（`{regions:[{slug}]}`）。フォルダーIDは返さない |
+| 公開 | `GET /regions` | なし | Drive直下フォルダー由来の地域slug一覧（`{regions:[{slug}]}`）。フォルダーIDは返さない |
 | 管理者 | `POST /admin/drive/oauth/start` | IDトークン＋管理者 | 認可URLを返す（`{authorizationUrl}`） |
 | 管理者 | `GET /admin/drive/status` | 同上 | 認可済みか（トークンは返さない） |
 | 管理者 | `GET /admin/drive/folders` | 同上 | 地域一覧（フォルダーID付き）と除外されたフォルダー |
 
 - Driveが未認可なら `503 drive_not_authorized`、認可失効なら `503 drive_authorization_invalid`、親フォルダーに触れない場合は `502 drive_parent_inaccessible`。エラー形式は `{error:{code,message}}`。
 - フォルダー名がそのままslugです。`^[a-z0-9]+(-[a-z0-9]+)*$`（64文字以内）に合わないフォルダーと同名フォルダーは地域として採用せず、管理者向けAPIの`ignored`に出ます。
-- `/regions`はログイン必須にしています（Drive上のフォルダーを追加するだけで匿名ユーザーに見えるのを避け、Drive APIの利用枠も保護するため）。結果は60秒キャッシュし、同時リクエストは1回のDrive呼び出しにまとめます。公開が必要になれば `authenticate` を外すだけです。
+- `/regions`は、Webアプリが「地域URLが有効か」を判定するための正本としてログイン不要で公開しています（閉覧はログイン不要のため）。フロントはこの一覧を画面に地域一覧として表示しません。返すのはslugのみです。Drive APIを保護するため、結果は60秒キャッシュし、同時リクエストは1回のDrive呼び出しにまとめます。Driveへの取得に失敗した場合は直近の成功結果を最大24時間返し（地域一覧が空にならない）、失敗直後の10秒は再試行しません。成功結果が一度も無い場合のみエラー（`503`等）を返します。管理者向けの`/admin/drive/folders`は常に最新を取得し、失敗をそのまま返します。フォルダー名をDriveで追加・削除・改名してから反映されるまでは最大60秒程度です。
 - 管理者判定は、検証済みIDトークンのカスタムクレーム `admin: true` または環境変数 `ADMIN_UIDS`（UID許可リスト）のみです。メールアドレスは判定に使いません。トークンは失効チェック付きで検証します。
 
 ## OAuthの設計

@@ -4,6 +4,7 @@ import { ArrowDownUp, Camera, LogOut, MapPin, Search } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
 import { usePhotos, useRegions, type Photo } from './data';
+import type { LatLng } from './regionList';
 
 const dateFormat = new Intl.DateTimeFormat('ja-JP', {
   dateStyle: 'medium',
@@ -61,6 +62,16 @@ function UserMenu() {
   );
 }
 
+// 地域切替時に地図を作り直さず表示範囲だけを移す（再生成するとMaps内部で未処理例外が出る）。
+function RegionViewport({ center, zoom }: { center: LatLng; zoom: number }) {
+  const map = useMap();
+  useEffect(() => {
+    map?.setCenter({ lat: center.lat, lng: center.lng });
+    map?.setZoom(zoom);
+  }, [map, center.lat, center.lng, zoom]);
+  return null;
+}
+
 function PhotoMarkers({ photos, selectedId, onSelect }: { photos: Photo[]; selectedId: string | null; onSelect: (id: string) => void }) {
   const map = useMap();
   const selected = photos.find((p) => p.id === selectedId);
@@ -108,6 +119,7 @@ function RegionMissing({ loading = false }: { loading?: boolean }) {
 function Photomap() {
   const { slug = '' } = useParams();
   const location = useLocation();
+  // Driveから取得した一覧はURLの有効性判定にのみ使い、画面には表示しない。
   const { regions, loading: regionsLoading } = useRegions();
   const region = regions.find((item) => item.slug === slug);
   const { photos, loading: photosLoading, error: photosError } = usePhotos(region?.id ?? null);
@@ -218,7 +230,6 @@ function Photomap() {
             {apiKey ? (
               <APIProvider apiKey={apiKey}>
                 <Map
-                  key={slug}
                   defaultCenter={region.defaultCenter}
                   defaultZoom={region.defaultZoom}
                   mapId={import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || undefined}
@@ -228,6 +239,7 @@ function Photomap() {
                   fullscreenControl
                   className="google-map"
                 >
+                  <RegionViewport center={region.defaultCenter} zoom={region.defaultZoom} />
                   <PhotoMarkers photos={visiblePhotos} selectedId={selectedId} onSelect={setSelectedId} />
                 </Map>
               </APIProvider>
@@ -239,7 +251,7 @@ function Photomap() {
                 <code>VITE_GOOGLE_MAPS_API_KEY</code>
               </div>
             )}
-            <div className="map-label"><span className="map-label-dot" />{region.name}<span>{region.prefecture}</span></div>
+            <div className="map-label"><span className="map-label-dot" />{region.name}{region.prefecture && <span>{region.prefecture}</span>}</div>
             <div className="map-coordinates">{region.defaultCenter.lat.toFixed(4)}°N&nbsp; {region.defaultCenter.lng.toFixed(4)}°E</div>
             <div className="map-attribution">PHOTOMAP <span>·</span> FIELDWORK SERIES</div>
           </section>
@@ -247,7 +259,7 @@ function Photomap() {
         <footer className="statusbar">
           <span>PHOTO MAPPING FOR FIELDWORK</span>
           <span className="status-location">{location.pathname.replace(import.meta.env.BASE_URL, '/')}</span>
-          <span>{region.prefecture} <b>·</b> JAPAN</span>
+          <span>{region.prefecture ? <>{region.prefecture} <b>·</b> JAPAN</> : 'JAPAN'}</span>
         </footer>
       </section>
     </main>

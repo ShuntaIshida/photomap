@@ -10,22 +10,24 @@ async function startFlow(ctx: ReturnType<typeof build>) {
   return { res, state };
 }
 
-describe('public / authenticated / admin separation', () => {
+describe('public / admin separation', () => {
   it('GET /health is public', async () => {
     const res = await request(build().app).get('/health');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'ok' });
   });
 
-  it('GET /regions requires a valid Firebase token', async () => {
-    const { app } = build();
-    expect((await request(app).get('/regions')).status).toBe(401);
-    expect((await request(app).get('/regions').set(bearer('bogus'))).status).toBe(401);
-    expect((await request(app).get('/regions').set('Authorization', 'Basic abc')).status).toBe(401);
+  it('GET /regions is public and needs no token', async () => {
+    const ctx = build();
+    await ctx.tokens.save('rt');
+    ctx.gateway.folders = [{ id: 'f1', name: 'yurihonjo' }];
+    const res = await request(ctx.app).get('/regions');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ regions: [{ slug: 'yurihonjo' }] });
   });
 
   it('GET /regions returns 503 drive_not_authorized before consent', async () => {
-    const res = await request(build().app).get('/regions').set(bearer('user-token'));
+    const res = await request(build().app).get('/regions');
     expect(res.status).toBe(503);
     expect(res.body.error.code).toBe('drive_not_authorized');
   });
@@ -38,7 +40,7 @@ describe('public / authenticated / admin separation', () => {
       { id: 'f2', name: 'nikaho' },
       { id: 'f3', name: 'Not A Slug' },
     ];
-    const res = await request(ctx.app).get('/regions').set(bearer('user-token'));
+    const res = await request(ctx.app).get('/regions');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ regions: [{ slug: 'nikaho' }, { slug: 'yurihonjo' }] });
   });
@@ -46,8 +48,8 @@ describe('public / authenticated / admin separation', () => {
   it('caches the region list to protect Drive quota', async () => {
     const ctx = build();
     await ctx.tokens.save('rt');
-    await request(ctx.app).get('/regions').set(bearer('user-token'));
-    await request(ctx.app).get('/regions').set(bearer('user-token'));
+    await request(ctx.app).get('/regions');
+    await request(ctx.app).get('/regions');
     expect(ctx.gateway.calls).toBe(1);
   });
 

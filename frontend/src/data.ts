@@ -8,25 +8,14 @@ import {
   type Timestamp,
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { buildRegions, resolveSlugs, type Region } from './regionList';
 
-export interface LatLng {
-  lat: number;
-  lng: number;
-}
+export type { Region } from './regionList';
 
-/** regions/{slug}: ドキュメントIDはslugと同一にする。 */
-export interface Region {
-  id: string;
-  name: string;
-  slug: string;
-  prefecture: string;
-  defaultCenter: LatLng;
-  defaultZoom: number;
-  sortOrder: number;
-  driveFolderId?: string;
-}
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
+const FETCH_TIMEOUT_MS = 8000;
 
-/** photos/{photoId}: 書き込みは将来のCloud Run APIのみ。regionIdはregions.idと対応する。 */
+/** photos/{photoId}: 書き込みは将来のCloud Run APIのみ。regionIdは地域のslugと対応する。 */
 export interface Photo {
   id: string;
   regionId: string;
@@ -47,12 +36,6 @@ export interface Photo {
   locationSource: 'exif' | 'manual';
   thumbnailDriveFileId?: string;
 }
-
-// Firestoreに地域データが無い間も画面を成立させる初期値。
-export const DEFAULT_REGIONS: Region[] = [
-  { id: 'yurihonjo', slug: 'yurihonjo', name: '由利本荘', prefecture: '秋田県', defaultCenter: { lat: 39.3853, lng: 140.0488 }, defaultZoom: 12, sortOrder: 1 },
-  { id: 'nikaho', slug: 'nikaho', name: 'にかほ', prefecture: '秋田県', defaultCenter: { lat: 39.2, lng: 139.9061 }, defaultZoom: 12, sortOrder: 2 },
-];
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const toDate = (v: unknown): Date | null =>
@@ -101,39 +84,59 @@ function parsePhoto(id: string, d: DocumentData): Photo | null {
 }
 
 /**
- * Firestoreのregionsを購読し、初期値とslug単位でマージする（Firestore側を優先）。
- * 将来はCloud RunがDriveの地域フォルダ一覧をregionsへ同期する前提。
+ * URLが有効な地域の判定に使う一覧。正本はGoogle Drive（バックエンドの公開GET /regions）で、画面での地域一覧表示には使わない。
+ * 取得はページ読み込みごと。失敗時のフォールバックはresolveSlugsを参照。
+ * Firestoreのregionsは既知地域以外の表示名・初期座標のメタデータとしてのみ使う（存在判定には使わない）。
  */
 export function useRegions(): { regions: Region[]; loading: boolean } {
-  const [fetched, setFetched] = useState<Region[] | null>(null);
-  const [loading, setLoading] = useState(Boolean(db));
+  const [slugs, setSlugs] = useState<string[] | null>(null);
+  const [meta, setMeta] = useState<Region[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+    (async () => {
+      const result = await resolveSlugs({
+        apiBase: API_BASE,
+        fetchFn: (url, init) => fetch(url, init),
+        storage: safeStorage(),
+        signal: ctrl.signal,
+      });
+      if (active) setSlugs(result);
+    })();
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (!db) return;
     return onSnapshot(
       collection(db, 'regions'),
-      (snap) => {
-        setFetched(
+      (snap) =>
+        setMeta(
           snap.docs
             .map((doc) => parseRegion(doc.id, doc.data()))
             .filter((r): r is Region => r !== null),
-        );
-        setLoading(false);
-      },
-      () => {
-        setFetched(null);
-        setLoading(false);
-      },
+        ),
+      () => setMeta([]),
     );
   }, []);
 
-  const regions = useMemo(() => {
-    const bySlug = new Map(DEFAULT_REGIONS.map((r) => [r.slug, r]));
-    for (const r of fetched ?? []) bySlug.set(r.slug, r);
-    return [...bySlug.values()].sort((a, b) => a.sortOrder - b.sortOrder);
-  }, [fetched]);
+  const regions = useMemo(() => (slugs ? buildRegions(slugs, meta) : []), [slugs, meta]);
+  return { regions, loading: slugs === null };
+}
 
-  return { regions, loading };
+function safeStorage(): Storage | undefined {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 地域別のphotosを購読する。複合インデックスを避けるため並び替えはクライアント側で行う。 */

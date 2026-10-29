@@ -31,6 +31,7 @@ jobs:
         working-directory: frontend
         env:
           VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '/photomap/' }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'https://photomap-api-506452568070.asia-northeast1.run.app' }}
           VITE_GOOGLE_MAPS_API_KEY: ${{ vars.VITE_GOOGLE_MAPS_API_KEY }}
           VITE_GOOGLE_MAPS_MAP_ID: ${{ vars.VITE_GOOGLE_MAPS_MAP_ID }}
           VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}

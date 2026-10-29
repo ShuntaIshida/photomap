@@ -81,6 +81,13 @@ export function createApp(deps: AppDeps) {
     res.json({ status: 'ok' });
   });
 
+  // 地域一覧（閉覧はログイン不要）。slugのみ返し、フォルダーIDは管理者APIでのみ返す。
+  // Driveへの問い合わせはサーバー側のキャッシュ・同時実行の集約で抑えている。
+  app.get('/regions', noStore, async (_req, res) => {
+    const { regions: list } = await regions.list();
+    res.json({ regions: list.map((r) => ({ slug: r.slug })) });
+  });
+
   // Googleからのリダイレクト。認証はIDトークンではなく、管理者が開始時に発行した1回限りのstateで行う。
   app.get('/oauth/google/callback', noStore, async (req, res) => {
     const state = single(req.query.state, 256);
@@ -98,12 +105,6 @@ export function createApp(deps: AppDeps) {
       if (!(e instanceof AppError)) log('ERROR', 'oauth callback failed', { error: (e as Error).name });
       res.status(status).type('html').send(resultPage('認可を完了できませんでした'));
     }
-  });
-
-  // --- ログイン済みユーザー ---
-  app.get('/regions', noStore, authenticate(auth), async (_req, res) => {
-    const { regions: list } = await regions.list();
-    res.json({ regions: list.map((r) => ({ slug: r.slug })) });
   });
 
   // --- 管理者のみ ---
