@@ -1,26 +1,120 @@
-import { APIProvider, Map } from '@vis.gl/react-google-maps';
-import { ArrowDownUp, Camera, MapPin, Search } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { APIProvider, Map, Marker, useMap } from '@vis.gl/react-google-maps';
+import { ArrowDownUp, Camera, LogOut, MapPin, Search } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { useAuth } from './auth';
+import { usePhotos, useRegions, type Photo } from './data';
 
-const regions = [
-  { slug: 'yurihonjo', name: '由利本荘', count: '01' },
-  { slug: 'akita', name: '秋田', count: '02' },
-  { slug: 'noshiro', name: '能代', count: '03' },
-] as const;
+const dateFormat = new Intl.DateTimeFormat('ja-JP', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'Asia/Tokyo',
+});
 
-const regionCoordinates: Record<string, { lat: number; lng: number }> = {
-  yurihonjo: { lat: 39.3853, lng: 140.0488 },
-  akita: { lat: 39.7186, lng: 140.1024 },
-  noshiro: { lat: 40.2122, lng: 140.0278 },
-};
+function formatCaptured(photo: Photo) {
+  const date = photo.capturedAt ?? photo.uploadedAt;
+  if (!date) return '日時不明';
+  const text = dateFormat.format(date);
+  if (!photo.capturedAt) return `投稿 ${text}`;
+  return photo.capturedAtTimeZoneKnown ? text : `${text}（時刻帯不明）`;
+}
+
+function UserMenu() {
+  const { user, loading, configured, error, signIn, signOut } = useAuth();
+
+  if (!configured) {
+    return (
+      <button className="profile-button" type="button" disabled title="Firebaseの環境変数が未設定です">
+        <span className="profile-dot" />
+        <span>ゲスト</span>
+      </button>
+    );
+  }
+  if (loading) return <span className="profile-button">確認中…</span>;
+  if (!user) {
+    return (
+      <div className="auth-group">
+        {error && <span className="auth-error" role="alert">{error}</span>}
+        <button className="profile-button" type="button" onClick={() => void signIn()} title="Googleでログイン">
+          <span className="profile-dot" />
+          <span>ゲスト</span>
+          <span className="login-label">ログイン</span>
+        </button>
+      </div>
+    );
+  }
+  const name = user.displayName || user.email || 'ユーザー';
+  return (
+    <div className="auth-group">
+      <span className="profile-button" title={user.email ?? undefined}>
+        {user.photoURL ? (
+          <img className="profile-avatar" src={user.photoURL} alt="" referrerPolicy="no-referrer" />
+        ) : (
+          <span className="profile-dot" />
+        )}
+        <span className="profile-name">{name}</span>
+      </span>
+      <button className="icon-button" type="button" onClick={() => void signOut()} aria-label="ログアウト" title="ログアウト">
+        <LogOut size={16} />
+      </button>
+    </div>
+  );
+}
+
+function PhotoMarkers({ photos, selectedId, onSelect }: { photos: Photo[]; selectedId: string | null; onSelect: (id: string) => void }) {
+  const map = useMap();
+  const selected = photos.find((p) => p.id === selectedId);
+
+  useEffect(() => {
+    if (map && selected?.latitude != null && selected.longitude != null) {
+      map.panTo({ lat: selected.latitude, lng: selected.longitude });
+    }
+  }, [map, selected]);
+
+  return (
+    <>
+      {photos.map((p) =>
+        p.latitude != null && p.longitude != null ? (
+          <Marker
+            key={p.id}
+            position={{ lat: p.latitude, lng: p.longitude }}
+            title={p.originalFilename}
+            zIndex={p.id === selectedId ? 10 : 1}
+            onClick={() => onSelect(p.id)}
+            icon={{
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: p.id === selectedId ? 11 : 7,
+              fillColor: p.id === selectedId ? '#e6a23c' : '#27725d',
+              fillOpacity: 1,
+              strokeColor: '#ffffff',
+              strokeWeight: 2,
+            }}
+          />
+        ) : null,
+      )}
+    </>
+  );
+}
 
 function Photomap() {
   const { slug = 'yurihonjo' } = useParams();
   const location = useLocation();
+  const regions = useRegions();
   const region = regions.find((item) => item.slug === slug);
+  const { photos, loading: photosLoading, error: photosError } = usePhotos(slug);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [keyword, setKeyword] = useState('');
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
+  const visiblePhotos = useMemo(() => {
+    const q = keyword.trim().toLowerCase();
+    return q
+      ? photos.filter((p) => `${p.originalFilename} ${p.uploaderName}`.toLowerCase().includes(q))
+      : photos;
+  }, [photos, keyword]);
+
   if (!region) return <Navigate to="/yurihonjo" replace />;
+  const countLabel = String(photos.length).padStart(2, '0');
 
   return (
     <main className="app-shell">
@@ -44,10 +138,7 @@ function Photomap() {
           <div className="wordmark"><span>PHOTO</span>MAP</div>
           <div className="topbar-right">
             <span className="edition-label">FIELDWORK ATLAS <span>2026</span></span>
-            <button className="profile-button" type="button" title="Phase 2でログインを追加">
-              <span className="profile-dot" />
-              <span>ゲスト</span>
-            </button>
+            <UserMenu />
           </div>
         </header>
 
@@ -57,15 +148,16 @@ function Photomap() {
             <h1>{region.name}</h1>
           </div>
           <nav className="region-tabs" aria-label="地域を選択">
-            {regions.map((item) => (
+            {regions.map((item, index) => (
               <Link
                 key={item.slug}
                 className={`region-tab${item.slug === slug ? ' selected' : ''}`}
                 to={`/${item.slug}`}
                 aria-current={item.slug === slug ? 'page' : undefined}
+                onClick={() => setSelectedId(null)}
               >
                 <span>{item.name}</span>
-                <span className="tab-index">{item.count}</span>
+                <span className="tab-index">{String(index + 1).padStart(2, '0')}</span>
               </Link>
             ))}
           </nav>
@@ -76,7 +168,7 @@ function Photomap() {
             <div className="panel-heading">
               <div>
                 <span className="eyebrow">COLLECTION</span>
-                <h2>写真一覧 <span className="photo-count">00</span></h2>
+                <h2>写真一覧 <span className="photo-count">{countLabel}</span></h2>
               </div>
               <button className="icon-button" type="button" aria-label="撮影日時順" title="撮影日時順">
                 <ArrowDownUp size={17} />
@@ -84,17 +176,46 @@ function Photomap() {
             </div>
             <label className="search-box">
               <Search size={16} aria-hidden="true" />
-              <input aria-label="写真を検索" placeholder="場所・投稿者を検索" />
+              <input
+                aria-label="写真を検索"
+                placeholder="ファイル名・投稿者を検索"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+              />
               <kbd>/</kbd>
             </label>
-            <div className="empty-collection">
-              <div className="empty-icon"><Camera size={22} strokeWidth={1.5} /></div>
-              <p className="empty-title">まだ写真がありません</p>
-              <p className="empty-copy">この地域に投稿された写真が<br />ここに表示されます。</p>
-            </div>
+            {visiblePhotos.length > 0 ? (
+              <ul className="photo-list">
+                {visiblePhotos.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      className={`photo-item${p.id === selectedId ? ' selected' : ''}`}
+                      aria-pressed={p.id === selectedId}
+                      onClick={() => setSelectedId(p.id)}
+                    >
+                      <span className="photo-name">{p.originalFilename}</span>
+                      <span className="photo-meta">{formatCaptured(p)}</span>
+                      <span className="photo-meta">
+                        {p.uploaderName || '投稿者不明'}
+                        {!p.hasGps && ' ・ 位置未設定'}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="empty-collection">
+                <div className="empty-icon"><Camera size={22} strokeWidth={1.5} /></div>
+                <p className="empty-title">
+                  {photosError ? '写真を読み込めませんでした' : photosLoading ? '読み込み中…' : photos.length ? '該当する写真がありません' : 'まだ写真がありません'}
+                </p>
+                <p className="empty-copy">この地域に投稿された写真が<br />ここに表示されます。</p>
+              </div>
+            )}
             <div className="panel-footer">
               <span><i /> 地図と同期中</span>
-              <span>0 PHOTOS</span>
+              <span>{photos.length} PHOTOS</span>
             </div>
           </section>
 
@@ -103,15 +224,17 @@ function Photomap() {
               <APIProvider apiKey={apiKey}>
                 <Map
                   key={slug}
-                  defaultCenter={regionCoordinates[slug]}
-                  defaultZoom={12}
+                  defaultCenter={region.defaultCenter}
+                  defaultZoom={region.defaultZoom}
                   mapId={import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || undefined}
                   gestureHandling="greedy"
                   disableDefaultUI
                   zoomControl
                   fullscreenControl
                   className="google-map"
-                />
+                >
+                  <PhotoMarkers photos={visiblePhotos} selectedId={selectedId} onSelect={setSelectedId} />
+                </Map>
               </APIProvider>
             ) : (
               <div className="map-key-state">
@@ -121,15 +244,15 @@ function Photomap() {
                 <code>VITE_GOOGLE_MAPS_API_KEY</code>
               </div>
             )}
-            <div className="map-label"><span className="map-label-dot" />{region.name}<span>秋田県</span></div>
-            <div className="map-coordinates">{regionCoordinates[slug].lat.toFixed(4)}°N&nbsp; {regionCoordinates[slug].lng.toFixed(4)}°E</div>
+            <div className="map-label"><span className="map-label-dot" />{region.name}<span>{region.prefecture}</span></div>
+            <div className="map-coordinates">{region.defaultCenter.lat.toFixed(4)}°N&nbsp; {region.defaultCenter.lng.toFixed(4)}°E</div>
             <div className="map-attribution">PHOTOMAP <span>·</span> FIELDWORK SERIES</div>
           </section>
         </div>
         <footer className="statusbar">
           <span>PHOTO MAPPING FOR FIELDWORK</span>
           <span className="status-location">{location.pathname.replace(import.meta.env.BASE_URL, '/')}</span>
-          <span>秋田県 <b>·</b> JAPAN</span>
+          <span>{region.prefecture} <b>·</b> JAPAN</span>
         </footer>
       </section>
     </main>

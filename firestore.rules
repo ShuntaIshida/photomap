@@ -1,0 +1,20 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 地図の閲覧はログイン不要。
+    match /regions/{regionId} {
+      allow read: if true;
+      allow write: if false; // 管理操作は将来の認証済みCloud Run APIから行う
+    }
+
+    match /photos/{photoId} {
+      allow read: if true;
+      allow write: if false; // 登録・更新は将来の認証済みCloud Run APIから行う
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
