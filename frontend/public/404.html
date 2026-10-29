@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Photomap</title>
+    <script>
+      const path = location.pathname + location.search + location.hash;
+      const segments = location.pathname.split('/').filter(Boolean);
+      const projectSite = location.hostname.endsWith('github.io');
+      const base = projectSite && segments.length ? `/${segments[0]}/` : '/';
+      sessionStorage.setItem('photomap-redirect', path);
+      location.replace(base);
+    </script>
+  </head>
+  <body></body>
+</html>
