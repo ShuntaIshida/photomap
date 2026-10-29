@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   collection,
   onSnapshot,
@@ -51,8 +51,7 @@ export interface Photo {
 // Firestoreに地域データが無い間も画面を成立させる初期値。
 export const DEFAULT_REGIONS: Region[] = [
   { id: 'yurihonjo', slug: 'yurihonjo', name: '由利本荘', prefecture: '秋田県', defaultCenter: { lat: 39.3853, lng: 140.0488 }, defaultZoom: 12, sortOrder: 1 },
-  { id: 'akita', slug: 'akita', name: '秋田', prefecture: '秋田県', defaultCenter: { lat: 39.7186, lng: 140.1024 }, defaultZoom: 12, sortOrder: 2 },
-  { id: 'noshiro', slug: 'noshiro', name: '能代', prefecture: '秋田県', defaultCenter: { lat: 40.2122, lng: 140.0278 }, defaultZoom: 12, sortOrder: 3 },
+  { id: 'nikaho', slug: 'nikaho', name: 'にかほ', prefecture: '秋田県', defaultCenter: { lat: 39.2, lng: 139.9061 }, defaultZoom: 12, sortOrder: 2 },
 ];
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -101,34 +100,48 @@ function parsePhoto(id: string, d: DocumentData): Photo | null {
   };
 }
 
-/** Firestoreのregionsを購読する。未設定・0件・エラー時は初期値にフォールバックする。 */
-export function useRegions(): Region[] {
-  const [regions, setRegions] = useState<Region[]>(DEFAULT_REGIONS);
+/**
+ * Firestoreのregionsを購読し、初期値とslug単位でマージする（Firestore側を優先）。
+ * 将来はCloud RunがDriveの地域フォルダ一覧をregionsへ同期する前提。
+ */
+export function useRegions(): { regions: Region[]; loading: boolean } {
+  const [fetched, setFetched] = useState<Region[] | null>(null);
+  const [loading, setLoading] = useState(Boolean(db));
 
   useEffect(() => {
     if (!db) return;
     return onSnapshot(
       collection(db, 'regions'),
       (snap) => {
-        const list = snap.docs
-          .map((doc) => parseRegion(doc.id, doc.data()))
-          .filter((r): r is Region => r !== null)
-          .sort((a, b) => a.sortOrder - b.sortOrder);
-        setRegions(list.length ? list : DEFAULT_REGIONS);
+        setFetched(
+          snap.docs
+            .map((doc) => parseRegion(doc.id, doc.data()))
+            .filter((r): r is Region => r !== null),
+        );
+        setLoading(false);
       },
-      () => setRegions(DEFAULT_REGIONS),
+      () => {
+        setFetched(null);
+        setLoading(false);
+      },
     );
   }, []);
 
-  return regions;
+  const regions = useMemo(() => {
+    const bySlug = new Map(DEFAULT_REGIONS.map((r) => [r.slug, r]));
+    for (const r of fetched ?? []) bySlug.set(r.slug, r);
+    return [...bySlug.values()].sort((a, b) => a.sortOrder - b.sortOrder);
+  }, [fetched]);
+
+  return { regions, loading };
 }
 
 /** 地域別のphotosを購読する。複合インデックスを避けるため並び替えはクライアント側で行う。 */
-export function usePhotos(regionId: string) {
+export function usePhotos(regionId: string | null) {
   const [state, setState] = useState<{ regionId: string; photos: Photo[]; error: boolean } | null>(null);
 
   useEffect(() => {
-    if (!db) return;
+    if (!db || !regionId) return;
     return onSnapshot(
       query(collection(db, 'photos'), where('regionId', '==', regionId)),
       (snap) => {
@@ -145,7 +158,7 @@ export function usePhotos(regionId: string) {
   const current = state?.regionId === regionId ? state : null;
   return {
     photos: current?.photos ?? [],
-    loading: Boolean(db) && current === null,
+    loading: Boolean(db) && Boolean(regionId) && current === null,
     error: current?.error ?? false,
   };
 }

@@ -96,12 +96,21 @@ function PhotoMarkers({ photos, selectedId, onSelect }: { photos: Photo[]; selec
   );
 }
 
+function RegionMissing({ loading = false }: { loading?: boolean }) {
+  return (
+    <main className="region-missing">
+      <h1>{loading ? '読み込み中…' : '地域が見つかりません'}</h1>
+      {!loading && <p>URLをご確認ください。</p>}
+    </main>
+  );
+}
+
 function Photomap() {
-  const { slug = 'yurihonjo' } = useParams();
+  const { slug = '' } = useParams();
   const location = useLocation();
-  const regions = useRegions();
+  const { regions, loading: regionsLoading } = useRegions();
   const region = regions.find((item) => item.slug === slug);
-  const { photos, loading: photosLoading, error: photosError } = usePhotos(slug);
+  const { photos, loading: photosLoading, error: photosError } = usePhotos(region?.id ?? null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [keyword, setKeyword] = useState('');
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
@@ -113,13 +122,13 @@ function Photomap() {
       : photos;
   }, [photos, keyword]);
 
-  if (!region) return <Navigate to="/yurihonjo" replace />;
+  if (!region) return <RegionMissing loading={regionsLoading} />;
   const countLabel = String(photos.length).padStart(2, '0');
 
   return (
     <main className="app-shell">
       <aside className="rail" aria-label="メインナビゲーション">
-        <Link className="brand-mark" to="/yurihonjo" aria-label="Photomap ホーム">
+        <Link className="brand-mark" to={`/${region.slug}`} aria-label={`Photomap ${region.name}`}>
           <MapPin size={21} strokeWidth={2.2} />
         </Link>
         <div className="rail-rule" />
@@ -147,20 +156,6 @@ function Photomap() {
             <span className="eyebrow">地域マップ</span>
             <h1>{region.name}</h1>
           </div>
-          <nav className="region-tabs" aria-label="地域を選択">
-            {regions.map((item, index) => (
-              <Link
-                key={item.slug}
-                className={`region-tab${item.slug === slug ? ' selected' : ''}`}
-                to={`/${item.slug}`}
-                aria-current={item.slug === slug ? 'page' : undefined}
-                onClick={() => setSelectedId(null)}
-              >
-                <span>{item.name}</span>
-                <span className="tab-index">{String(index + 1).padStart(2, '0')}</span>
-              </Link>
-            ))}
-          </nav>
         </div>
 
         <div className="content-grid">
@@ -264,7 +259,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Navigate to="/yurihonjo" replace />} />
       <Route path="/:slug" element={<Photomap />} />
-      <Route path="*" element={<Navigate to="/yurihonjo" replace />} />
+      <Route path="*" element={<RegionMissing />} />
     </Routes>
   );
 }

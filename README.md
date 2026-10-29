@@ -5,7 +5,7 @@ Photomap is a collaborative, location-based photo mapping web application for fi
 
 ## Features
 
-- Region-based map routes for Yurihonjo, Akita, and Noshiro
+- Independent per-region map pages (`/yurihonjo`, `/nikaho`); each page shows only its own region's photos and has no links to other regions
 - Responsive map and photo-list workspace
 - Google Maps JavaScript API integration (optional during local development)
 - GitHub Pages SPA fallback for direct links and page reloads
@@ -42,7 +42,7 @@ npm ci
 npm run dev
 ```
 
-Open the URL printed by Vite. Region routes are `/yurihonjo`, `/akita`, and `/noshiro`. Without a Maps API key, the app shows a map setup prompt while the rest of the interface remains usable.
+Open the URL printed by Vite. Region routes are `/yurihonjo` and `/nikaho`; `/` redirects to `/yurihonjo`. Without a Maps API key, the app shows a map setup prompt while the rest of the interface remains usable.
 
 To enable the interactive map, create `frontend/.env.local`:
 
@@ -76,7 +76,9 @@ The browser key in `VITE_FIREBASE_API_KEY` may be restricted to the HTTP referre
 
 ### Firestore data model
 
-`regions/{slug}` (document ID equals the slug): `name`, `slug`, `prefecture`, `defaultCenter` (`{lat, lng}`), `defaultZoom`, `sortOrder`, optional `driveFolderId`, `createdAt`, `updatedAt`. When the collection is empty or unreadable, the built-in Yurihonjo / Akita / Noshiro defaults are used. Note that `regions` is publicly readable, so `driveFolderId` is visible to clients; the folder itself stays private.
+`regions/{slug}` (document ID equals the slug): `name`, `slug`, `prefecture`, `defaultCenter` (`{lat, lng}`), `defaultZoom`, `sortOrder`, optional `driveFolderId`, `createdAt`, `updatedAt`. The app merges the built-in defaults (Yurihonjo, Nikaho) with Firestore `regions` by slug, Firestore taking precedence. Any region document in Firestore (including previously stored ones such as `akita` or `noshiro`) stays reachable at `/<slug>`, but no page links to it. Unknown slugs show a "region not found" message.
+
+Planned (not implemented yet): each direct subfolder of the Drive parent folder `17pp81R43EeQOIpaOtNR0IAIRldykz-Fq` is a region, and the Cloud Run backend will sync that folder list into `regions` so a new folder gets a working URL. Until the backend exists, add a region manually by creating a `regions/<slug>` document in the Firebase Console. Note that `regions` is publicly readable, so `driveFolderId` is visible to clients; the folder itself stays private.
 
 `photos/{photoId}`: `regionId` (a region slug), `driveFileId`, `originalFilename`, `mimeType`, `latitude`, `longitude`, `capturedAt` (Timestamp), `capturedAtTimeZoneKnown` (boolean; `false` when EXIF has no offset), `uploadedAt` (Timestamp), `uploaderUid`, `uploaderName`, `width`, `height`, `hasGps`, `locationSource` (`exif` | `manual`), optional `thumbnailDriveFileId`. Markers are drawn only when `hasGps` is `true` and both coordinates are numbers.
 
