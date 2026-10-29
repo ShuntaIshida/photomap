@@ -25,12 +25,13 @@ Photomap is a collaborative, location-based photo mapping web application for fi
 ## Project structure
 
 - `frontend/` — React, TypeScript, and Vite web application
+- `backend/` — Cloud Run API (Node.js + TypeScript); see [backend/README.md](backend/README.md)
 - `.github/workflows/deploy-pages.yml` — GitHub Pages deployment
 - `firestore.rules`, `firebase.json` — Firestore Security Rules
 
 ## Status
 
-Phases 1 and 2 are implemented. Photo uploads and the Cloud Run API are planned for later phases.
+Phases 1 and 2 are implemented. The backend foundation (Firebase token verification, admin-only Google Drive OAuth, Drive region folder listing) is implemented but not deployed; photo uploads and Firestore region sync are planned for later phases.
 
 ## Local development
 
