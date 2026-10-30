@@ -41,6 +41,13 @@ describe('inspectPhoto (pre-upload check)', () => {
     expect(r).toMatchObject({ ok: false, code: 'unsupported' });
   });
 
+  it('names the actual size when a file exceeds the limit', async () => {
+    const big = { size: 25 * 1024 * 1024, slice: () => { throw new Error('should not read'); } } as unknown as Blob;
+    const r = await inspectPhoto(big);
+    expect(r).toMatchObject({ ok: false, code: 'too_large' });
+    if (!r.ok) expect(r.reason).toMatch(/25\.0MB.*20\.0MB/);
+  });
+
   it('rejects empty and oversized files without reading them', async () => {
     expect(await inspectPhoto(new Blob([]))).toMatchObject({ ok: false, code: 'empty' });
     const big = { size: MAX_ORIGINAL_BYTES + 1, arrayBuffer: () => Promise.reject(new Error('should not read')) } as unknown as Blob;

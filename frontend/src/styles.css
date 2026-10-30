@@ -178,3 +178,15 @@ button.profile-button:disabled { cursor: default; opacity: 0.7; }
   .photo-panel { flex: 1 1 58%; min-height: 0; overscroll-behavior: contain; }
   .photo-list { min-height: 120px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 }
+
+.upload-progress { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.upload-progress-line { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.upload-progress-line span { color: #6f7b72; font-size: 11px; }
+.upload-bar { height: 6px; border-radius: 3px; background: #e4e9e3; overflow: hidden; }
+.upload-bar-fill { height: 100%; background: var(--green); transition: width 0.2s; }
+.upload-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.upload-secondary { height: 36px; padding: 0 14px; border: 1px solid #c9cfc9; border-radius: 3px; background: #fff; color: #242a28; font-size: 12px; font-weight: 600; cursor: pointer; }
+.upload-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+.upload-confirm { padding: 10px 12px; border: 1px solid #ecd9a8; border-radius: 4px; background: #fbf3dc; }
+.upload-confirm p { margin: 0 0 10px; color: #6b5a22; font-size: 12px; line-height: 1.7; }
+.upload-confirm-buttons { display: flex; flex-wrap: wrap; gap: 8px; }

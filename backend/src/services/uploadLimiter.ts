@@ -9,7 +9,7 @@ export class UploadLimiter {
   private readonly inflight = new Map<string, number>();
 
   constructor(
-    private readonly maxPerWindow = 60,
+    private readonly maxPerWindow = 1000,
     private readonly windowMs = 60 * 60 * 1000,
     private readonly maxConcurrent = 2,
     private readonly now: () => number = Date.now,

@@ -1,7 +1,6 @@
 import exifr from 'exifr';
 
 export const MAX_ORIGINAL_BYTES = 20 * 1024 * 1024;
-export const MAX_FILES_PER_BATCH = 30;
 
 export type ImageKind = 'jpeg' | 'heic';
 
@@ -33,7 +32,9 @@ export const REJECT_MESSAGES: Record<RejectCode, string> = {
   no_gps: 'GPS位置情報がないためアップロードできません（今回は対象外です）',
 };
 
-const reject = (code: RejectCode): Inspection => ({ ok: false, code, reason: REJECT_MESSAGES[code] });
+const reject = (code: RejectCode, reason: string = REJECT_MESSAGES[code]): Inspection => ({ ok: false, code, reason });
+
+const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)}MB`;
 
 /** 座標として採用できるか。(0,0)は位置情報なしのカメラが書く値なので除外する。 */
 export function isValidGps(lat: unknown, lng: unknown): boolean {
@@ -45,14 +46,20 @@ export function isValidGps(lat: unknown, lng: unknown): boolean {
 /** 送信前の確認。サーバーでも同じ検証を行う（これはUX向けの事前チェック）。 */
 export async function inspectPhoto(file: Blob): Promise<Inspection> {
   if (file.size === 0) return reject('empty');
-  if (file.size > MAX_ORIGINAL_BYTES) return reject('too_large');
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (file.size > MAX_ORIGINAL_BYTES) return reject('too_large', `ファイルサイズが大きすぎます（${mb(file.size)}。上限${mb(MAX_ORIGINAL_BYTES)}）`);
+  // 先頭だけで形式を判定し、EXIFは必要な範囲だけ読む（大量選択時に全ファイルをメモリへ載せない）。
+  const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
   const kind = sniffImageKind(bytes);
   if (!kind) return reject('unsupported');
 
   let gps: { latitude?: number; longitude?: number } | undefined;
   try {
-    gps = await exifr.gps(bytes);
+    try {
+      gps = await exifr.gps(file);
+    } catch {
+      // Blobを直接読めない環境では、全体を読み込んで解析し直す。
+      gps = await exifr.gps(new Uint8Array(await file.arrayBuffer()));
+    }
   } catch {
     // EXIFを読めないことはGPSが無いこととは別。サーバー（原本のEXIFを独立に解析）が判定する。
     return { ok: true, kind, serverCheck: true };

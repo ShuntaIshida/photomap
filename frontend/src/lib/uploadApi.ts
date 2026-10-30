@@ -78,6 +78,13 @@ const MESSAGES: Record<string, string> = {
 };
 
 export function describeUploadError(e: unknown): string {
-  if (e instanceof UploadError) return MESSAGES[e.code] ?? 'アップロードに失敗しました';
+  if (e instanceof UploadError) {
+    if (MESSAGES[e.code]) return MESSAGES[e.code]!;
+    // Cloud Runの入口はJSONではなくHTMLで返すため、ステータスから原因を示す。
+    if (e.status === 413) return 'ファイルサイズが大きすぎます（上限20MB）';
+    if (e.status === 408 || e.status === 504) return 'サーバーの処理がタイムアウトしました。時間をおいて再試行してください';
+    if (e.status >= 500) return 'サーバーでエラーが発生しました。時間をおいて再試行してください';
+    return 'アップロードに失敗しました';
+  }
   return '写真の処理に失敗しました';
 }

@@ -75,7 +75,10 @@ describe('describeUploadError', () => {
   it('gives actionable Japanese messages', () => {
     expect(describeUploadError(new UploadError('no_gps', 422))).toContain('GPS');
     expect(describeUploadError(new UploadError('drive_scope_insufficient', 503))).toContain('再認可');
-    expect(describeUploadError(new UploadError('something_new', 500))).toBe('アップロードに失敗しました');
+    expect(describeUploadError(new UploadError('something_new', 400))).toBe('アップロードに失敗しました');
+    expect(describeUploadError(new UploadError('unknown', 413))).toContain('20MB');
+    expect(describeUploadError(new UploadError('unknown', 504))).toContain('タイムアウト');
+    expect(describeUploadError(new UploadError('network', 0))).toContain('ネットワーク');
     expect(describeUploadError(new Error('decode failed'))).toContain('処理に失敗');
   });
 });
