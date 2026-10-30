@@ -162,14 +162,19 @@ button.profile-button:disabled { cursor: default; opacity: 0.7; }
   .admin-map { height: 320px; }
 }
 
-/* PC: ヘッダー・フッター・地図・パネル上部は固定し、写真一覧だけを縦スクロールさせる。 */
-@media (min-width: 701px) {
-  .app-shell { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
-  .workspace { min-height: 0; }
-  .content-grid { min-height: 0; grid-template-rows: minmax(0, 1fr); }
-  .photo-panel { min-height: 0; overflow-y: auto; }
-  .photo-list { min-height: 140px; padding-right: 4px; }
-  .photo-list::-webkit-scrollbar { width: 6px; }
-  .photo-list::-webkit-scrollbar-thumb { border-radius: 3px; background: #d3d9d4; }
-  .photo-list::-webkit-scrollbar-thumb:hover { background: #b9c1bb; }
+/* ヘッダー・フッター・地図・パネル上部は固定し、写真一覧だけを縦スクロールさせる（PC・スマートフォン共通）。 */
+.app-shell { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+.workspace { min-height: 0; }
+.content-grid { min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.photo-panel { min-height: 0; overflow-y: auto; }
+.photo-list { min-height: 140px; padding-right: 4px; }
+.photo-list::-webkit-scrollbar { width: 6px; }
+.photo-list::-webkit-scrollbar-thumb { border-radius: 3px; background: #d3d9d4; }
+.photo-list::-webkit-scrollbar-thumb:hover { background: #b9c1bb; }
+
+@media (max-width: 700px) {
+  /* 地図を上、一覧を下に縦分割する。一覧は下側の領域の中だけでスクロールする。 */
+  .map-panel { flex: 1 1 42%; min-height: 160px; }
+  .photo-panel { flex: 1 1 58%; min-height: 0; overscroll-behavior: contain; }
+  .photo-list { min-height: 120px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 }
