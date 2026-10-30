@@ -46,7 +46,7 @@ describe('buildRegions', () => {
 
   it('does not create regions for Firestore documents whose folder is absent from Drive (akita / noshiro)', () => {
     const stale: Region[] = ['akita', 'noshiro'].map((slug, i) => ({
-      id: slug, slug, name: slug, prefecture: '', defaultCenter: { lat: 1, lng: 2 }, defaultZoom: 10, sortOrder: i,
+      id: slug, slug, name: slug, prefecture: '', defaultCenter: { lat: 1, lng: 2 }, defaultZoom: 10, sortOrder: i, configured: true,
     }));
     const regions = buildRegions(['nikaho', 'yurihonjo'], stale);
     expect(regions.map((r) => r.slug)).toEqual(['yurihonjo', 'nikaho']);
@@ -54,13 +54,36 @@ describe('buildRegions', () => {
 
   it('uses Firestore metadata for new folders, else falls back to the folder name', () => {
     const meta: Region[] = [
-      { id: 'kisakata', slug: 'kisakata', name: '象潟', prefecture: '秋田県', defaultCenter: { lat: 39.2, lng: 139.9 }, defaultZoom: 11, sortOrder: 3 },
+      { id: 'kisakata', slug: 'kisakata', name: '象潟', prefecture: '秋田県', defaultCenter: { lat: 39.2, lng: 139.9 }, defaultZoom: 11, sortOrder: 3, configured: true },
     ];
     const regions = buildRegions(['kisakata', 'newplace'], meta);
     expect(regions.find((r) => r.slug === 'kisakata')?.name).toBe('象潟');
     const fallback = regions.find((r) => r.slug === 'newplace')!;
     expect(fallback.name).toBe('newplace');
     expect(fallback.defaultCenter.lat).toBeGreaterThan(0);
+  });
+
+  it('shows Ogaki in Gifu (not Akita) from the built-in default', () => {
+    const ogaki = buildRegions(['ogaki'], []).find((r) => r.slug === 'ogaki')!;
+    expect(ogaki.name).toBe('大垣');
+    expect(ogaki.defaultCenter.lat).toBeCloseTo(35.36, 1);
+    expect(ogaki.defaultCenter.lng).toBeCloseTo(136.61, 1);
+  });
+
+  it('prefers the Firestore settings over the built-in defaults, keeping the order', () => {
+    const meta: Region[] = [
+      { id: 'ogaki', slug: 'ogaki', name: '大垣市', prefecture: '', defaultCenter: { lat: 35.4, lng: 136.7 }, defaultZoom: 14, sortOrder: 999, configured: true },
+    ];
+    const regions = buildRegions(['ogaki', 'yurihonjo'], meta);
+    expect(regions.map((r) => r.slug)).toEqual(['yurihonjo', 'ogaki']);
+    expect(regions[1]).toMatchObject({ name: '大垣市', defaultZoom: 14, prefecture: '岐阜県', defaultCenter: { lat: 35.4, lng: 136.7 } });
+  });
+
+  it('shows a wide, clearly unconfigured placeholder for a new folder instead of guessing a place', () => {
+    const r = buildRegions(['newplace'], [])[0]!;
+    expect(r.configured).toBe(false);
+    expect(r.defaultZoom).toBeLessThanOrEqual(6);
+    expect(r.name).toBe('newplace');
   });
 
   it('returns an empty list for no slugs', () => {

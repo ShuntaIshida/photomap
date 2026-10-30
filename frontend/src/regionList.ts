@@ -3,7 +3,7 @@ export interface LatLng {
   lng: number;
 }
 
-/** 表示用の地域情報。一覧（どの地域が存在するか）はDriveが正本で、ここは表示メタデータ。 */
+/** 表示用の地域情報。一覧（どの地域が存在するか）はDriveが正本で、表示設定はFirestoreが正本。 */
 export interface Region {
   id: string;
   name: string;
@@ -13,19 +13,25 @@ export interface Region {
   defaultZoom: number;
   sortOrder: number;
   driveFolderId?: string;
+  /** 表示名・初期位置・ズームが設定済みか。未設定の地域は広域の仮表示になる。 */
+  configured: boolean;
 }
 
-// 表示名・初期座標をコード側で固定する既知の地域。存在するかどうかはDriveの一覧で決まる。
+// Firestoreに設定が無い間（登録前・読み込み失敗時）だけ使う既知の地域の既定値。存在するかどうかはDriveの一覧で決まる。
 export const DEFAULT_REGIONS: Region[] = [
-  { id: 'yurihonjo', slug: 'yurihonjo', name: '由利本荘', prefecture: '秋田県', defaultCenter: { lat: 39.3853, lng: 140.0488 }, defaultZoom: 12, sortOrder: 1 },
-  { id: 'nikaho', slug: 'nikaho', name: 'にかほ', prefecture: '秋田県', defaultCenter: { lat: 39.2, lng: 139.9061 }, defaultZoom: 12, sortOrder: 2 },
+  { id: 'yurihonjo', slug: 'yurihonjo', name: '由利本荘', prefecture: '秋田県', defaultCenter: { lat: 39.3853, lng: 140.0488 }, defaultZoom: 12, sortOrder: 1, configured: true },
+  { id: 'nikaho', slug: 'nikaho', name: 'にかほ', prefecture: '秋田県', defaultCenter: { lat: 39.2, lng: 139.9061 }, defaultZoom: 12, sortOrder: 2, configured: true },
+  { id: 'ogaki', slug: 'ogaki', name: '大垣', prefecture: '岐阜県', defaultCenter: { lat: 35.3593, lng: 136.6128 }, defaultZoom: 12, sortOrder: 3, configured: true },
 ];
+
+// Driveの一覧を取得できず、直近の一覧も無いときだけ有効にする地域。Driveでの存在を確認できない地域は含めない。
+const OFFLINE_FALLBACK_SLUGS = ['yurihonjo', 'nikaho'];
 
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-// メタデータが無い新規地域は秋田県全体を表示する。
-const FALLBACK_CENTER: LatLng = { lat: 39.72, lng: 140.1 };
-const FALLBACK_ZOOM = 9;
+// 設定が未入力の新規地域は、誤った場所を示さないよう日本全体を仮表示する。
+const FALLBACK_CENTER: LatLng = { lat: 36.2, lng: 138.25 };
+const FALLBACK_ZOOM = 5;
 
 /** `GET /regions`のレスポンスからslugを取り出す。形式が不正なら例外（空一覧とは区別する）。 */
 export function parseSlugResponse(body: unknown): string[] {
@@ -39,17 +45,19 @@ export function parseSlugResponse(body: unknown): string[] {
   return [...slugs];
 }
 
-/** Driveのslug一覧を表示用のRegionに変換する。固定メタデータ→Firestore→フォルダー名の順で名前等を決める。 */
+/** Driveのslug一覧を表示用のRegionに変換する。Firestoreの設定→既知の既定値→未設定の仮表示の順で決める。 */
 export function buildRegions(slugs: readonly string[], firestoreMeta: readonly Region[]): Region[] {
   const builtin = new Map(DEFAULT_REGIONS.map((r) => [r.slug, r]));
   const meta = new Map(firestoreMeta.map((r) => [r.slug, r]));
   return slugs
     .map((slug): Region => {
       const known = builtin.get(slug);
-      if (known) return known;
       const fromStore = meta.get(slug);
-      if (fromStore) return { ...fromStore, id: slug };
-      return { id: slug, slug, name: slug, prefecture: '', defaultCenter: FALLBACK_CENTER, defaultZoom: FALLBACK_ZOOM, sortOrder: 999 };
+      if (fromStore?.configured) {
+        return { ...fromStore, id: slug, prefecture: fromStore.prefecture || known?.prefecture || '', sortOrder: known?.sortOrder ?? fromStore.sortOrder };
+      }
+      if (known) return known;
+      return { id: slug, slug, name: slug, prefecture: '', defaultCenter: FALLBACK_CENTER, defaultZoom: FALLBACK_ZOOM, sortOrder: 999, configured: false };
     })
     .sort((a, b) => a.sortOrder - b.sortOrder || a.slug.localeCompare(b.slug));
 }
@@ -106,5 +114,5 @@ export async function resolveSlugs({ apiBase, fetchFn, storage, signal }: SlugSo
       if (last) return last;
     }
   }
-  return DEFAULT_REGIONS.map((r) => r.slug);
+  return OFFLINE_FALLBACK_SLUGS;
 }

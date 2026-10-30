@@ -13,6 +13,7 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。役割は、Fi
 | 公開 | `GET /regions` | なし | Drive直下フォルダー由来の地域slug一覧（`{regions:[{slug}]}`）。フォルダーIDは返さない |
 | 公開 | `GET /photos/:photoId/original` | なし | 全画面ビューア用。JPEGは原本を無加工で、HEICは表示用JPEG（長辺2560px）へ都度変換して返す（変換結果はDriveに保存しない） |
 | 公開 | `GET /photos/:photoId/thumbnail` | なし | Firestoreに登録済みの写真のサムネイルJPEGをDriveから代理配信。Driveファイル自体は公開しない |
+| 管理者 | `GET /admin/regions` / `PUT /admin/regions/:slug` | Firebase IDトークン（管理者） | 地域メタデータ（`displayName`・`center{lat,lng}`・`zoom`）の一覧と保存。slugはDriveのフォルダー名で変更不可。Driveに存在する地域だけ保存できる |
 | 投稿者本人/管理者 | `PATCH /photos/:photoId` | Firebase IDトークン | 表示タイトルの変更（本文 `{"title": "..."}`、1〜100文字・制御文字不可）。Firestoreの`title`だけを更新し、Driveのファイル名・`originalFilename`は変えない |
 | 投稿者本人/管理者 | `DELETE /photos/:photoId` | Firebase IDトークン | Driveの原本・サムネイルとFirestoreの写真を削除（地域フォルダー・他の写真は対象外） |
 | ログイン済み | `POST /regions/:slug/photos` | Firebase IDトークン | 写真1枚のアップロード（multipart: `file`=原本のみ。サムネイルはサーバーが生成。旧クライアントの`thumbnail`は無視）。下記「写真アップロード」参照 |
@@ -94,6 +95,8 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。役割は、Fi
 **原本の表示**: `GET /photos/:photoId/original`はFirestoreに登録済みの写真だけを写真ID経由で返します（任意のDriveファイルIDは受け付けません）。ログイン不要です。HEICの変換結果は小さなメモリLRU（24MB）と同時リクエストの合流で再変換を抑え、`Cache-Control: public, max-age=31536000, immutable`を付けます。失敗時はJSONエラー（`image_decode_failed`等）を返し、フロントエンドはサムネイルへフォールバックします。既存のJPEG写真は`driveFileId`/`mimeType`だけで原本表示でき、データ移行は不要です。
 
 **名前変更・削除の権限**: 検証済みIDトークンのUIDが写真の`uploaderUid`と一致する場合、または既存の管理者判定（カスタムクレーム`admin=true`／`ADMIN_UIDS`）の場合のみ許可します。`uploaderUid`が無い過去の写真は管理者だけが操作できます。対象は写真IDからFirestoreを引いて得た`driveFileId`/`thumbnailDriveFileId`だけで、クライアントはDriveのIDを指定できません。地域フォルダー（親フォルダー含む）と同じIDを指す記録は削除を拒否します。削除はDriveの原本→サムネイル→Firestoreの順で、途中で失敗してもFirestoreの記録が残るため再実行で完了できます（Drive上で既に無いファイルは削除済みとして扱います）。
+
+**地域メタデータ**: 地域の存在と保存先はDriveのフォルダー（フォルダー名=slug）、表示設定はFirestoreの`regions/{slug}`（`displayName`/`center`/`zoom`、加えて`driveFolderId`・`status`。旧フロントエンド互換で`name`/`defaultCenter`/`defaultZoom`にも同じ値を書く）が正本です。`GET /regions`でDriveの新しいフォルダーを見つけると、Firestoreに無い地域だけを1回登録します（`create`なので既存は上書きされず冪等）。`yurihonjo`/`nikaho`/`ogaki`は既知の初期値で登録し、それ以外は未設定（`status: unconfigured`）で登録して、管理者が`/admin/regions`画面で入力します。位置は推測しません（Geocoding APIは使用していません）。Firestoreの失敗時は30秒間再試行せず、地域一覧は通常どおり返します。
 
 **配信**: `GET /photos/:photoId/thumbnail`が、Firestoreに登録済みの写真のサムネイルだけをDriveから読んで返します（Driveファイルは公開しない）。任意のDriveファイルIDは受け付けません。ブラウザとの間は`Cache-Control: public, max-age=31536000, immutable`（写真IDが内容ハッシュ由来のため不変）で、Drive APIの利用を抑えます。GitHub Pagesの`<img>`から読めるよう`Cross-Origin-Resource-Policy: cross-origin`を付けています。
 

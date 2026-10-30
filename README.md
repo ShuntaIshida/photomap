@@ -94,7 +94,7 @@ Planned (not implemented yet): the Cloud Run backend will also sync the Drive fo
 
 ### Security Rules
 
-`regions` and `photos` are readable by anyone (map viewing needs no login) and **not writable from clients**. Registration goes through the Firebase-token-verified Cloud Run API (`POST /regions/<slug>/photos`) using the Admin SDK; the rules themselves need no change for uploads. Photo documents expose `driveFileId`/`thumbnailDriveFileId`, but the Drive files are private and can only be viewed through `GET /photos/<id>/thumbnail` on the API.
+Region display settings (`displayName`, `center`, `zoom`) live in `regions/{slug}` and are edited by administrators on `/admin/regions` (saved through `PUT /admin/regions/<slug>`); the Drive folder list still decides which regions exist. `regions` and `photos` are readable by anyone (map viewing needs no login) and **not writable from clients**. Registration goes through the Firebase-token-verified Cloud Run API (`POST /regions/<slug>/photos`) using the Admin SDK; the rules themselves need no change for uploads. Photo documents expose `driveFileId`/`thumbnailDriveFileId`, but the Drive files are private and can only be viewed through `GET /photos/<id>/thumbnail` on the API.
 
 ### Verifying locally
 

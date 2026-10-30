@@ -10,6 +10,7 @@ import type { DriveGateway } from './services/driveGateway.js';
 import { DRIVE_SCOPE, OAUTH_SCOPES } from './services/googleOAuth.js';
 import { parseUploadRequest } from './services/multipart.js';
 import type { OriginalService } from './services/originals.js';
+import type { RegionMetaService } from './services/regionMeta.js';
 import type { PhotoManageService } from './services/photoManage.js';
 import type { PhotoUploadService } from './services/photoUpload.js';
 import { SLUG_PATTERN, type RegionService } from './services/regions.js';
@@ -26,6 +27,7 @@ export interface AppDeps {
   photos: PhotoRepository;
   originals: OriginalService;
   manage: PhotoManageService;
+  regionMeta: RegionMetaService;
   uploadLimiter: UploadLimiter;
 }
 
@@ -64,7 +66,7 @@ const resultPage = (title: string) =>
   `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Photomap</title><body><h1>${title}</h1><p>このタブは閉じて構いません。</p></body></html>`;
 
 export function createApp(deps: AppDeps) {
-  const { config, auth, authorization, gateway, regions, uploads, photos, originals, manage, uploadLimiter } = deps;
+  const { config, auth, authorization, gateway, regions, uploads, photos, originals, manage, regionMeta, uploadLimiter } = deps;
   const app = express();
   const allowedOrigins = new Set(config.corsAllowedOrigins);
   // 写真ID→サムネイルDriveファイルID（不変）。Firestore読み取りを減らす。
@@ -75,7 +77,7 @@ export function createApp(deps: AppDeps) {
   app.use(
     cors({
       origin: (origin, cb) => cb(null, origin !== undefined && allowedOrigins.has(origin) ? origin : false),
-      methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
       allowedHeaders: ['Authorization', 'Content-Type'],
       maxAge: 600,
     }),
@@ -100,7 +102,10 @@ export function createApp(deps: AppDeps) {
   // 地域一覧（閉覧はログイン不要）。slugのみ返し、フォルダーIDは管理者APIでのみ返す。
   // Driveへの問い合わせはサーバー側のキャッシュ・同時実行の集約で抑えている。
   app.get('/regions', noStore, async (_req, res) => {
-    const { regions: list } = await regions.list();
+    const listing = await regions.list();
+    const { regions: list } = listing;
+    // 新しいフォルダーはここで1回だけFirestoreへ登録する（登録済みは何もしない）。失敗しても一覧は返す。
+    await regionMeta.ensureRegistered(listing).catch(() => undefined);
     res.json({ regions: list.map((r) => ({ slug: r.slug })) });
   });
 
@@ -237,6 +242,18 @@ export function createApp(deps: AppDeps) {
 
   admin.get('/drive/folders', async (_req, res) => {
     res.json(await regions.list({ fresh: true }));
+  });
+
+  // 地域の表示設定（表示名・初期中心・ズーム）。Driveに存在する地域だけが対象で、slugは変更できない。
+  admin.get('/regions', async (_req, res) => {
+    res.json(await regionMeta.adminList());
+  });
+
+  admin.put('/regions/:slug', express.json({ limit: '4kb' }), async (req, res) => {
+    const user = res.locals.user as AuthUser;
+    const slug = String(req.params.slug);
+    if (!SLUG_PATTERN.test(slug)) throw errors.regionNotFound();
+    res.json({ region: await regionMeta.save(user.uid, slug, req.body) });
   });
 
   app.use('/admin', admin);

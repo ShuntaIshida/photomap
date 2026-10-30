@@ -14,6 +14,7 @@ export const errors = {
   forbidden: () => new AppError(403, 'forbidden', 'Administrator privileges required'),
   notPhotoOwner: () => new AppError(403, 'not_photo_owner', 'Only the uploader or an administrator can change this photo'),
   invalidTitle: (message = 'Invalid title') => new AppError(400, 'invalid_title', message),
+  invalidRegionMetadata: (message = 'Invalid region metadata') => new AppError(400, 'invalid_region_metadata', message),
   invalidRequest: () => new AppError(400, 'invalid_request', 'Invalid request body'),
   unsafeDeleteTarget: () => new AppError(409, 'unsafe_delete_target', 'The stored Drive file reference is not safe to delete'),
   driveNotAuthorized: () =>

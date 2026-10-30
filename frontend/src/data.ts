@@ -49,16 +49,20 @@ const toDate = (v: unknown): Date | null =>
 
 const sortTime = (p: Photo) => (p.capturedAt ?? p.uploadedAt)?.getTime() ?? 0;
 
+/** 新形式（displayName/center/zoom）を優先し、旧形式（name/defaultCenter/defaultZoom）も読む。表示設定が未入力のドキュメントは対象外。 */
 function parseRegion(id: string, d: DocumentData): Region | null {
-  const c = d.defaultCenter;
-  if (typeof d.name !== 'string' || !c || !isNum(c.lat) || !isNum(c.lng)) return null;
+  const c = d.center ?? d.defaultCenter;
+  const name = typeof d.displayName === 'string' && d.displayName ? d.displayName : typeof d.name === 'string' ? d.name : '';
+  const zoom = isNum(d.zoom) ? d.zoom : isNum(d.defaultZoom) ? d.defaultZoom : null;
+  if (!name || zoom === null || !c || !isNum(c.lat) || !isNum(c.lng)) return null;
   return {
     id,
-    name: d.name,
+    name,
     slug: typeof d.slug === 'string' ? d.slug : id,
     prefecture: typeof d.prefecture === 'string' ? d.prefecture : '',
     defaultCenter: { lat: c.lat, lng: c.lng },
-    defaultZoom: isNum(d.defaultZoom) ? d.defaultZoom : 12,
+    defaultZoom: zoom,
+    configured: true,
     sortOrder: isNum(d.sortOrder) ? d.sortOrder : 999,
     driveFolderId: typeof d.driveFolderId === 'string' ? d.driveFolderId : undefined,
   };
@@ -98,6 +102,8 @@ function parsePhoto(id: string, d: DocumentData): Photo | null {
 export function useRegions(): { regions: Region[]; loading: boolean } {
   const [slugs, setSlugs] = useState<string[] | null>(null);
   const [meta, setMeta] = useState<Region[]>([]);
+  // 最初のFirestoreの応答（または失敗）が来るまで待ち、地図が既定値から設定値へ飛ばないようにする。
+  const [metaReady, setMetaReady] = useState(!db);
 
   useEffect(() => {
     let active = true;
@@ -124,18 +130,23 @@ export function useRegions(): { regions: Region[]; loading: boolean } {
     if (!db) return;
     return onSnapshot(
       collection(db, 'regions'),
-      (snap) =>
+      (snap) => {
         setMeta(
           snap.docs
             .map((doc) => parseRegion(doc.id, doc.data()))
             .filter((r): r is Region => r !== null),
-        ),
-      () => setMeta([]),
+        );
+        setMetaReady(true);
+      },
+      () => {
+        setMeta([]);
+        setMetaReady(true);
+      },
     );
   }, []);
 
   const regions = useMemo(() => (slugs ? buildRegions(slugs, meta) : []), [slugs, meta]);
-  return { regions, loading: slugs === null };
+  return { regions, loading: slugs === null || !metaReady };
 }
 
 function safeStorage(): Storage | undefined {

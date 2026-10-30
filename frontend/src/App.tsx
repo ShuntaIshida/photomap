@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { APIProvider, Map, useMap } from '@vis.gl/react-google-maps';
 import { ArrowDownUp, Camera, ImagePlus, LogOut, MapPin, Search } from 'lucide-react';
-import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
 import { API_BASE, photoName, usePhotos, useRegions, type Photo } from './data';
 import { originalUrl, thumbnailUrl } from './lib/photoUrls';
@@ -15,6 +15,7 @@ import { PhotoLayer, type FocusRequest } from './photoMap/PhotoLayer';
 import PhotoViewer from './photoMap/PhotoViewer';
 import './photoMap/photoMap.css';
 import type { LatLng } from './regionList';
+import AdminRegions from './AdminRegions';
 import UploadDialog from './UploadDialog';
 
 const dateFormat = new Intl.DateTimeFormat('ja-JP', {
@@ -234,9 +235,17 @@ function Photomap() {
         <header className="topbar">
           <div className="wordmark"><span>PHOTO</span>MAP</div>
           <div className="topbar-right">
+            {isAdmin && <Link className="admin-link" to="/admin/regions">地域設定</Link>}
             <UserMenu />
           </div>
         </header>
+
+        {!region.configured && (
+          <p className="region-unconfigured" role="status">
+            この地域の表示設定（地域名・初期位置）は未設定です。
+            {isAdmin ? <Link to="/admin/regions">地域設定で入力してください</Link> : '管理者による設定をお待ちください。'}
+          </p>
+        )}
 
         <div className="content-grid">
           <section className="photo-panel" aria-label={`${region.name}の写真一覧`}>
@@ -359,9 +368,9 @@ function Photomap() {
           </section>
         </div>
         <footer className="statusbar">
-          <span>PHOTO MAPPING FOR FIELDWORK</span>
           <span className="status-location">{location.pathname.replace(import.meta.env.BASE_URL, '/')}</span>
-          <span>{region.prefecture ? <>{region.prefecture} <b>·</b> JAPAN</> : 'JAPAN'}</span>
+          <span className="status-copyright">© Shunta Ishida</span>
+          <span className="status-region">{region.prefecture ? <>{region.prefecture} <b>·</b> JAPAN</> : 'JAPAN'}</span>
         </footer>
       </section>
       {uploadOpen && canUpload && (
@@ -397,6 +406,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/yurihonjo" replace />} />
+      <Route path="/admin/regions" element={<AdminRegions />} />
       <Route path="/:slug" element={<Photomap />} />
       <Route path="*" element={<RegionMissing />} />
     </Routes>
