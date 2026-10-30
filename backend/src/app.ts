@@ -10,6 +10,7 @@ import type { DriveGateway } from './services/driveGateway.js';
 import { DRIVE_SCOPE, OAUTH_SCOPES } from './services/googleOAuth.js';
 import { parseUploadRequest } from './services/multipart.js';
 import type { OriginalService } from './services/originals.js';
+import type { PhotoManageService } from './services/photoManage.js';
 import type { PhotoUploadService } from './services/photoUpload.js';
 import { SLUG_PATTERN, type RegionService } from './services/regions.js';
 import type { UploadLimiter } from './services/uploadLimiter.js';
@@ -24,6 +25,7 @@ export interface AppDeps {
   uploads: PhotoUploadService;
   photos: PhotoRepository;
   originals: OriginalService;
+  manage: PhotoManageService;
   uploadLimiter: UploadLimiter;
 }
 
@@ -62,7 +64,7 @@ const resultPage = (title: string) =>
   `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Photomap</title><body><h1>${title}</h1><p>このタブは閉じて構いません。</p></body></html>`;
 
 export function createApp(deps: AppDeps) {
-  const { config, auth, authorization, gateway, regions, uploads, photos, originals, uploadLimiter } = deps;
+  const { config, auth, authorization, gateway, regions, uploads, photos, originals, manage, uploadLimiter } = deps;
   const app = express();
   const allowedOrigins = new Set(config.corsAllowedOrigins);
   // 写真ID→サムネイルDriveファイルID（不変）。Firestore読み取りを減らす。
@@ -73,7 +75,7 @@ export function createApp(deps: AppDeps) {
   app.use(
     cors({
       origin: (origin, cb) => cb(null, origin !== undefined && allowedOrigins.has(origin) ? origin : false),
-      methods: ['GET', 'POST'],
+      methods: ['GET', 'POST', 'PATCH', 'DELETE'],
       allowedHeaders: ['Authorization', 'Content-Type'],
       maxAge: 600,
     }),
@@ -186,6 +188,30 @@ export function createApp(deps: AppDeps) {
     }
   });
 
+  // 名前変更・削除。投稿者本人または管理者のみ（Firebase IDトークンを検証し、権限はサーバーで判定する）。
+  // 対象は写真IDから引いたFirestore登録済みのファイルだけで、クライアントはDriveのIDを指定できない。
+  const photoIdParam = (v: unknown) => {
+    const id = String(v);
+    if (!PHOTO_ID.test(id)) throw errors.photoNotFound();
+    return id;
+  };
+
+  app.patch('/photos/:photoId', noStore, authenticate(auth), express.json({ limit: '4kb' }), async (req, res) => {
+    const user = res.locals.user as AuthUser;
+    const body: unknown = req.body;
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) throw errors.invalidRequest();
+    res.json(await manage.rename(user, photoIdParam(req.params.photoId), (body as { title?: unknown }).title));
+  });
+
+  app.delete('/photos/:photoId', noStore, authenticate(auth), async (req, res) => {
+    const user = res.locals.user as AuthUser;
+    const photoId = photoIdParam(req.params.photoId);
+    await manage.remove(user, photoId);
+    thumbnailIds.delete(photoId);
+    originals.forget(photoId);
+    res.status(204).end();
+  });
+
   // --- 管理者のみ ---
   const admin = express.Router();
   admin.use(noStore, authenticate(auth), requireAdmin);
@@ -220,6 +246,12 @@ export function createApp(deps: AppDeps) {
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof AppError) {
       res.status(err.status).json({ error: { code: err.code, message: err.message } });
+      return;
+    }
+    // 不正なJSON・大きすぎる本文はボディパーサーのエラーなので400/413で返す。
+    const parseErr = err as { type?: string; status?: number };
+    if (typeof parseErr.type === 'string' && parseErr.type.startsWith('entity.')) {
+      res.status(parseErr.status === 413 ? 413 : 400).json({ error: { code: 'invalid_request', message: 'Invalid request body' } });
       return;
     }
     log('ERROR', 'unhandled error', { error: err instanceof Error ? err.name : 'unknown' });

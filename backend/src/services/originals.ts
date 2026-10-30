@@ -50,6 +50,13 @@ export class OriginalService {
     this.cacheBytes = options.cacheBytes ?? 24 * 1024 * 1024;
   }
 
+  /** 写真削除後に変換済みキャッシュを捨てる。 */
+  forget(photoId: string) {
+    const cached = this.cache.get(photoId);
+    if (cached) this.cacheSize -= cached.length;
+    this.cache.delete(photoId);
+  }
+
   async open(photoId: string): Promise<OriginalResult> {
     const info = await this.deps.photos.getOriginalInfo(photoId);
     if (!info) throw errors.photoNotFound();

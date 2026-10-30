@@ -1,4 +1,4 @@
-import type { Photo } from '../data';
+import { photoName, type Photo } from '../data';
 
 export interface ClusterSheetProps {
   photos: readonly Photo[];
@@ -25,8 +25,8 @@ export default function ClusterSheet({ photos, thumbnailUrl, onPick, onClose }: 
             const src = thumbnailUrl(photo);
             return (
               <button key={photo.id} className="pmap-sheet-item" type="button" onClick={() => onPick(i)}>
-                {src ? <img src={src} alt={photo.originalFilename} loading="lazy" decoding="async" /> : <span className="pmap-sheet-noimg" />}
-                <span className="pmap-sheet-item-name">{photo.originalFilename}</span>
+                {src ? <img src={src} alt={photoName(photo)} loading="lazy" decoding="async" /> : <span className="pmap-sheet-noimg" />}
+                <span className="pmap-sheet-item-name">{photoName(photo)}</span>
               </button>
             );
           })}

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer';
-import type { Photo } from '../data';
+import { photoName, type Photo } from '../data';
 import {
   clusterMarkerSize,
   diffGroups,
@@ -99,7 +99,7 @@ export function PhotoLayer(props: PhotoLayerProps) {
           // 代表写真は撮影日時が最も新しい写真。
           const representative = pickRepresentativePhoto(photos);
           const element = createMarkerElement({
-            name: representative?.originalFilename ?? '',
+            name: representative ? photoName(representative) : '',
             thumbnailUrl: representative ? latest.current.thumbnailUrl(representative) : null,
             count: photos.length,
             size: clusterMarkerSize(photos.length),
@@ -174,7 +174,7 @@ export function PhotoLayer(props: PhotoLayerProps) {
     for (const group of add) {
       const representative = pickRepresentativePhoto(group.photos)!;
       const element = createMarkerElement({
-        name: representative.originalFilename,
+        name: photoName(representative),
         thumbnailUrl: latest.current.thumbnailUrl(representative),
         count: group.photos.length,
         size: SINGLE_MARKER_SIZE,
@@ -182,7 +182,7 @@ export function PhotoLayer(props: PhotoLayerProps) {
       const marker = new google.maps.marker.AdvancedMarkerElement({
         position: { lat: group.lat, lng: group.lng },
         content: element,
-        title: representative.originalFilename,
+        title: photoName(representative),
         gmpClickable: true,
         collisionBehavior: google.maps.CollisionBehavior.OPTIONAL_AND_HIDES_LOWER_PRIORITY,
         // 新しい写真ほど前面に出す。CSSのz-indexに収まるよう秒単位にする。

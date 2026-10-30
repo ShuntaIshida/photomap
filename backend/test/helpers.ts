@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import { createApp } from '../src/app.js';
 import { SharpImageProcessor, type ImageProcessor } from '../src/imaging/imageProcessor.js';
+import { PhotoManageService } from '../src/services/photoManage.js';
 import { OriginalService } from '../src/services/originals.js';
 import type { Config } from '../src/config.js';
 import { errors } from '../src/errors.js';
@@ -156,9 +157,10 @@ export function build(
   const images = options.images ?? sharedImages;
   const uploads = new PhotoUploadService({ gateway, regions, photos, images, extract: options.extract });
   const originals = new OriginalService({ photos, gateway, images });
+  const manage = new PhotoManageService({ photos, gateway, regions, parentFolderId: config.driveParentFolderId });
   const uploadLimiter = options.limiter ?? new UploadLimiter();
   const authorization = new DriveAuthorization({ config, google, states, tokens, isAdmin: (uid) => auth.isAdmin(uid) });
-  const app = createApp({ config, auth, authorization, gateway, regions, uploads, photos, originals, uploadLimiter });
+  const app = createApp({ config, auth, authorization, gateway, regions, uploads, photos, originals, manage, uploadLimiter });
   return { app, tokens, states, auth, google, gateway, regions, photos };
 }
 

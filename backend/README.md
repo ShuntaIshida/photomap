@@ -13,6 +13,8 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。役割は、Fi
 | 公開 | `GET /regions` | なし | Drive直下フォルダー由来の地域slug一覧（`{regions:[{slug}]}`）。フォルダーIDは返さない |
 | 公開 | `GET /photos/:photoId/original` | なし | 全画面ビューア用。JPEGは原本を無加工で、HEICは表示用JPEG（長辺2560px）へ都度変換して返す（変換結果はDriveに保存しない） |
 | 公開 | `GET /photos/:photoId/thumbnail` | なし | Firestoreに登録済みの写真のサムネイルJPEGをDriveから代理配信。Driveファイル自体は公開しない |
+| 投稿者本人/管理者 | `PATCH /photos/:photoId` | Firebase IDトークン | 表示タイトルの変更（本文 `{"title": "..."}`、1〜100文字・制御文字不可）。Firestoreの`title`だけを更新し、Driveのファイル名・`originalFilename`は変えない |
+| 投稿者本人/管理者 | `DELETE /photos/:photoId` | Firebase IDトークン | Driveの原本・サムネイルとFirestoreの写真を削除（地域フォルダー・他の写真は対象外） |
 | ログイン済み | `POST /regions/:slug/photos` | Firebase IDトークン | 写真1枚のアップロード（multipart: `file`=原本のみ。サムネイルはサーバーが生成。旧クライアントの`thumbnail`は無視）。下記「写真アップロード」参照 |
 | 管理者 | `POST /admin/drive/oauth/start` | IDトークン＋管理者 | 認可URLを返す（`{authorizationUrl}`） |
 | 管理者 | `GET /admin/drive/status` | 同上 | 認可済みか、付与スコープ、`writeAccess`（写真保存に必要な書き込み権限があるか）。トークンは返さない |
@@ -90,6 +92,8 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。役割は、Fi
 **HEICの処理**: GPS・撮影日時は原本のEXIFから画像デコードとは独立に読みます（exifr。HEICで読めない場合はISOBMFFコンテナからExif項目を直接取り出して再試行）。EXIFの解析失敗は`exif_parse_failed`、位置情報が無い場合は`no_gps`として区別します。画像変換はCloud Run上でlibheif-js（WASM）をワーカースレッドで実行し、sharpでリサイズします（OSパッケージ追加は不要）。同時実行1・待ち行列6（超過は503 `conversion_busy`）・30秒タイムアウト・5,000万画素上限で、ジョブごとにワーカーを終了してメモリを返します。HEICは1件あたり約150〜300MBのメモリを使うため、Cloud Runのメモリは1GiB以上、max-instancesは小さめを推奨します。
 
 **原本の表示**: `GET /photos/:photoId/original`はFirestoreに登録済みの写真だけを写真ID経由で返します（任意のDriveファイルIDは受け付けません）。ログイン不要です。HEICの変換結果は小さなメモリLRU（24MB）と同時リクエストの合流で再変換を抑え、`Cache-Control: public, max-age=31536000, immutable`を付けます。失敗時はJSONエラー（`image_decode_failed`等）を返し、フロントエンドはサムネイルへフォールバックします。既存のJPEG写真は`driveFileId`/`mimeType`だけで原本表示でき、データ移行は不要です。
+
+**名前変更・削除の権限**: 検証済みIDトークンのUIDが写真の`uploaderUid`と一致する場合、または既存の管理者判定（カスタムクレーム`admin=true`／`ADMIN_UIDS`）の場合のみ許可します。`uploaderUid`が無い過去の写真は管理者だけが操作できます。対象は写真IDからFirestoreを引いて得た`driveFileId`/`thumbnailDriveFileId`だけで、クライアントはDriveのIDを指定できません。地域フォルダー（親フォルダー含む）と同じIDを指す記録は削除を拒否します。削除はDriveの原本→サムネイル→Firestoreの順で、途中で失敗してもFirestoreの記録が残るため再実行で完了できます（Drive上で既に無いファイルは削除済みとして扱います）。
 
 **配信**: `GET /photos/:photoId/thumbnail`が、Firestoreに登録済みの写真のサムネイルだけをDriveから読んで返します（Driveファイルは公開しない）。任意のDriveファイルIDは受け付けません。ブラウザとの間は`Cache-Control: public, max-age=31536000, immutable`（写真IDが内容ハッシュ由来のため不変）で、Drive APIの利用を抑えます。GitHub Pagesの`<img>`から読めるよう`Cross-Origin-Resource-Policy: cross-origin`を付けています。
 

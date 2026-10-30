@@ -11,7 +11,7 @@ import PhotoViewer from './PhotoViewer';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const photo = (id: string, name = `${id}.jpg`): Photo => ({
-  id, regionId: 'yurihonjo', driveFileId: 'd', originalFilename: name, mimeType: 'image/jpeg', latitude: 39, longitude: 140,
+  id, regionId: 'yurihonjo', driveFileId: 'd', originalFilename: name, title: '', mimeType: 'image/jpeg', latitude: 39, longitude: 140,
   capturedAt: new Date(1_700_000_000_000), capturedAtTimeZoneKnown: true, uploadedAt: null, uploaderUid: 'u', uploaderName: '投稿者',
   width: null, height: null, hasGps: true, locationSource: 'exif', thumbnailDriveFileId: 't',
 });
@@ -171,6 +171,130 @@ describe('PhotoViewer original image', () => {
     act(() => void host.querySelectorAll('img')[0]!.dispatchEvent(new Event('error')));
     act(() => void host.querySelector('img')!.dispatchEvent(new Event('error')));
     expect(host.querySelector('.pmap-viewer-missing')).not.toBeNull();
+    unmount();
+  });
+});
+
+describe('PhotoViewer rename and delete', () => {
+  const photos = [photo('a'), photo('b', 'IMG_9.HEIC')];
+  const setup = (over: Record<string, unknown> = {}, list: Photo[] = photos) => {
+    const onRename = vi.fn(async () => undefined);
+    const onDelete = vi.fn(async () => undefined);
+    const onClose = vi.fn();
+    const m = mount(
+      createElement(PhotoViewer, {
+        photos: list,
+        index: 1,
+        imageUrl: () => null,
+        formatDate: (): string => '',
+        onIndexChange: vi.fn(),
+        onClose,
+        canManage: () => true,
+        onRename,
+        onDelete,
+        ...over,
+      } as never),
+    );
+    return { ...m, onRename, onDelete, onClose };
+  };
+  const button = (host: HTMLElement, text: string) => [...host.querySelectorAll('button')].find((b) => b.textContent === text) as HTMLButtonElement | undefined;
+  const click = (el: HTMLElement | undefined) => act(() => el!.click());
+  const settle = () => act(async () => { await Promise.resolve(); });
+  const type = (input: HTMLInputElement, value: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+  it('hides the actions from people who cannot manage the photo', () => {
+    const { host, unmount } = setup({ canManage: () => false });
+    expect(button(host, '名前を変更')).toBeUndefined();
+    expect(button(host, '削除')).toBeUndefined();
+    unmount();
+  });
+
+  it('shows the display title when set and falls back to the file name otherwise', () => {
+    const titled = setup({}, [{ ...photos[0]!, title: '調査地点A' }, photos[1]!]);
+    titled.unmount();
+    const one = setup({ index: 0 }, [{ ...photos[0]!, title: '調査地点A' }]);
+    expect(one.host.querySelector('.pmap-viewer-name')?.textContent).toBe('調査地点A');
+    one.unmount();
+    const plain = setup();
+    expect(plain.host.querySelector('.pmap-viewer-name')?.textContent).toBe('IMG_9.HEIC');
+    plain.unmount();
+  });
+
+  it('renames: prefilled input, saves once, and rejects an empty name on the server side call', async () => {
+    const { host, onRename, unmount } = setup();
+    click(button(host, '名前を変更'));
+    const input = host.querySelector('input') as HTMLInputElement;
+    expect(input.value).toBe('IMG_9.HEIC');
+    type(input, '新しい名前');
+    act(() => void host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    await settle();
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(onRename).toHaveBeenCalledWith(expect.objectContaining({ id: 'b' }), '新しい名前');
+    expect(host.querySelector('input')).toBeNull();
+    unmount();
+  });
+
+  it('shows the failure and keeps the editor open when saving fails', async () => {
+    const { host, unmount } = setup({ onRename: vi.fn(async () => { throw new Error('名前を変更できませんでした'); }) });
+    click(button(host, '名前を変更'));
+    act(() => void host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    await settle();
+    expect(host.querySelector('[role=alert]')?.textContent).toBe('名前を変更できませんでした');
+    expect(host.querySelector('input')).not.toBeNull();
+    unmount();
+  });
+
+  it('asks for confirmation naming the photo, and cancelling changes nothing', () => {
+    const { host, onDelete, unmount } = setup();
+    click(button(host, '削除'));
+    const dialog = host.querySelector('[role=alertdialog]')!;
+    expect(dialog.textContent).toContain('IMG_9.HEIC');
+    expect(dialog.textContent).toContain('Google Drive');
+    expect(onDelete).not.toHaveBeenCalled();
+    click(button(host, 'キャンセル'));
+    expect(host.querySelector('[role=alertdialog]')).toBeNull();
+    expect(onDelete).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('deletes only after confirming, and blocks double submission while running', async () => {
+    let finish!: () => void;
+    const onDelete = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const { host, unmount } = setup({ onDelete });
+    click(button(host, '削除'));
+    click(button(host, '削除する'));
+    click(button(host, '削除中…'));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(button(host, '削除中…')!.disabled).toBe(true);
+    await act(async () => { finish(); await Promise.resolve(); });
+    unmount();
+  });
+
+  it('shows the error inside the confirmation and stays open when deletion fails', async () => {
+    const { host, unmount } = setup({ onDelete: vi.fn(async () => { throw new Error('削除に失敗しました'); }) });
+    click(button(host, '削除'));
+    click(button(host, '削除する'));
+    await settle();
+    expect(host.querySelector('[role=alertdialog] [role=alert]')?.textContent).toBe('削除に失敗しました');
+    expect(button(host, '削除する')!.disabled).toBe(false);
+    unmount();
+  });
+
+  it('Escape cancels the confirmation instead of closing the viewer, and arrows do not navigate while editing', () => {
+    const onIndexChange = vi.fn();
+    const { host, onClose, unmount } = setup({ onIndexChange });
+    click(button(host, '削除'));
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' })));
+    expect(onIndexChange).not.toHaveBeenCalled();
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+    expect(host.querySelector('[role=alertdialog]')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+    expect(onClose).toHaveBeenCalledTimes(1);
     unmount();
   });
 });

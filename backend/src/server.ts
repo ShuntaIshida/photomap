@@ -8,6 +8,7 @@ import { GoogleDriveGateway } from './services/driveGateway.js';
 import { GoogleOAuthClient } from './services/googleOAuth.js';
 import { SharpImageProcessor } from './imaging/imageProcessor.js';
 import { OriginalService } from './services/originals.js';
+import { PhotoManageService } from './services/photoManage.js';
 import { PhotoUploadService } from './services/photoUpload.js';
 import { RegionService } from './services/regions.js';
 import { UploadLimiter } from './services/uploadLimiter.js';
@@ -35,6 +36,7 @@ const app = createApp({
   regions,
   photos,
   originals: new OriginalService({ photos, gateway, images }),
+  manage: new PhotoManageService({ photos, gateway, regions, parentFolderId: config.driveParentFolderId }),
   uploads: new PhotoUploadService({ gateway, regions, photos, images }),
   uploadLimiter: new UploadLimiter(),
   authorization: new DriveAuthorization({

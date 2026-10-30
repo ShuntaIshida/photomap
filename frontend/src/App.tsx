@@ -3,10 +3,12 @@ import { APIProvider, Map, useMap } from '@vis.gl/react-google-maps';
 import { ArrowDownUp, Camera, ImagePlus, LogOut, MapPin, Search } from 'lucide-react';
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
-import { API_BASE, usePhotos, useRegions, type Photo } from './data';
+import { API_BASE, photoName, usePhotos, useRegions, type Photo } from './data';
 import { originalUrl, thumbnailUrl } from './lib/photoUrls';
 import type { PhotoPoint } from './lib/photoGroups';
+import { describePhotoError, deletePhoto, PhotoApiError, renamePhoto } from './lib/photoApi';
 import { loadMapType, MAP_TYPE_IDS, saveMapType } from './lib/mapType';
+import { useIsAdmin } from './lib/useIsAdmin';
 import { uploadAvailability } from './lib/uploadAvailability';
 import ClusterSheet from './photoMap/ClusterSheet';
 import { PhotoLayer, type FocusRequest } from './photoMap/PhotoLayer';
@@ -116,7 +118,17 @@ function Photomap() {
   // Driveから取得した一覧はURLの有効性判定にのみ使い、画面には表示しない。
   const { regions, loading: regionsLoading } = useRegions();
   const region = regions.find((item) => item.slug === slug);
-  const { photos, loading: photosLoading, error: photosError } = usePhotos(region?.id ?? null);
+  const { photos: fetchedPhotos, loading: photosLoading, error: photosError } = usePhotos(region?.id ?? null);
+  // 名前変更・削除の直後はFirestoreの購読が追いつくまでの間も画面へ即時に反映する。
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [titleOverrides, setTitleOverrides] = useState<Readonly<Record<string, string>>>({});
+  const photos = useMemo(
+    () =>
+      fetchedPhotos
+        .filter((p) => !removedIds.has(p.id))
+        .map((p) => (titleOverrides[p.id] !== undefined ? { ...p, title: titleOverrides[p.id]! } : p)),
+    [fetchedPhotos, removedIds, titleOverrides],
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focus, setFocus] = useState<FocusRequest | null>(null);
   const [viewer, setViewer] = useState<{ photos: PhotoPoint[]; index: number } | null>(null);
@@ -127,12 +139,13 @@ function Photomap() {
   // 閲覧はログイン不要。アップロードだけログイン必須（サーバーでもFirebaseトークンを検証する）。
   const upload = uploadAvailability({ user, authLoading, authConfigured, apiBase: API_BASE });
   const canUpload = upload.enabled;
+  const isAdmin = useIsAdmin(user, API_BASE);
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
   const visiblePhotos = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     return q
-      ? photos.filter((p) => `${p.originalFilename} ${p.uploaderName}`.toLowerCase().includes(q))
+      ? photos.filter((p) => `${photoName(p)} ${p.originalFilename} ${p.uploaderName}`.toLowerCase().includes(q))
       : photos;
   }, [photos, keyword]);
 
@@ -156,8 +169,8 @@ function Photomap() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (viewer) setViewer(null);
-      else if (sheet) closeSheet();
+      // ビューアが開いている間のEscはビューア側が処理する（入力・確認の取り消しを優先するため）。
+      if (!viewer && sheet) closeSheet();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -167,6 +180,50 @@ function Photomap() {
   useEffect(() => {
     if (selectedId) document.getElementById(`photo-item-${selectedId}`)?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
+
+  // ビューア・シートが持つ写真は、最新の一覧（タイトル更新・削除反映後）に合わせて表示する。
+  // react-google-mapsのMapをimportしているため、組み込みのMapではなく普通のオブジェクトを使う。
+  const photoById: Record<string, Photo> = Object.fromEntries(photos.map((p) => [p.id, p]));
+  const fresh = <T extends Photo>(list: readonly T[]): T[] =>
+    list.flatMap((p) => {
+      const latest = photoById[p.id];
+      return latest ? [{ ...p, title: latest.title }] : [];
+    });
+  const viewerPhotos = viewer ? fresh(viewer.photos) : [];
+  const sheetPhotos = sheet ? fresh(sheet) : null;
+  const viewerEmpty = viewer !== null && viewerPhotos.length === 0;
+  useEffect(() => {
+    if (viewerEmpty) setViewer(null);
+  }, [viewerEmpty]);
+
+  const canManage = (photo: Photo) => !!user && (isAdmin || (photo.uploaderUid !== '' && photo.uploaderUid === user.uid));
+
+  const manageError = (e: unknown, fallback: string) => new Error(describePhotoError(e, fallback));
+  const authToken = async () => {
+    if (!user) throw new PhotoApiError('unauthenticated', 401);
+    return user.getIdToken();
+  };
+
+  const renameSelected = async (photo: Photo, title: string) => {
+    try {
+      const saved = await renamePhoto({ apiBase: API_BASE, photoId: photo.id, token: await authToken() }, title);
+      setTitleOverrides((m) => ({ ...m, [photo.id]: saved }));
+    } catch (e) {
+      throw manageError(e, '名前を変更できませんでした');
+    }
+  };
+
+  const deleteSelected = async (photo: Photo) => {
+    try {
+      await deletePhoto({ apiBase: API_BASE, photoId: photo.id, token: await authToken() });
+    } catch (e) {
+      // 既に消えている写真は、画面からも取り除いて整合させる。
+      if (e instanceof PhotoApiError && e.code === 'photo_not_found') setRemovedIds((s) => new Set(s).add(photo.id));
+      throw manageError(e, '写真を削除できませんでした');
+    }
+    setRemovedIds((s) => new Set(s).add(photo.id));
+    setSelectedId((id) => (id === photo.id ? null : id));
+  };
 
   if (!region) return <RegionMissing loading={regionsLoading} />;
   const countLabel = String(photos.length).padStart(2, '0');
@@ -235,7 +292,7 @@ function Photomap() {
                         <span className="photo-thumb photo-thumb-empty" aria-hidden="true"><Camera size={16} /></span>
                       )}
                       <span className="photo-text">
-                        <span className="photo-name">{p.originalFilename}</span>
+                        <span className="photo-name">{photoName(p)}</span>
                         <span className="photo-meta">{formatCaptured(p)}</span>
                         <span className="photo-meta">
                           {p.uploaderName || '投稿者不明'}
@@ -317,15 +374,18 @@ function Photomap() {
         />
       )}
       {/* ビューアを閉じるとシートに戻れるよう、ビューアが開いていてもシートは下に残す。 */}
-      {sheet && <ClusterSheet photos={sheet} thumbnailUrl={thumbnailUrl} onPick={(i) => openViewer(sheet, i)} onClose={closeSheet} />}
-      {viewer && (
+      {sheetPhotos && sheetPhotos.length > 0 && <ClusterSheet photos={sheetPhotos} thumbnailUrl={thumbnailUrl} onPick={(i) => openViewer(sheetPhotos, i)} onClose={closeSheet} />}
+      {viewer && viewerPhotos.length > 0 && (
         <PhotoViewer
-          photos={viewer.photos}
-          index={viewer.index}
+          photos={viewerPhotos}
+          index={Math.min(viewer.index, viewerPhotos.length - 1)}
+          canManage={canManage}
+          onRename={renameSelected}
+          onDelete={deleteSelected}
           imageUrl={thumbnailUrl}
           originalUrl={originalUrl}
           formatDate={formatCaptured}
-          onIndexChange={(index) => openViewer(viewer.photos, index)}
+          onIndexChange={(index) => openViewer(viewerPhotos, index)}
           onClose={() => setViewer(null)}
         />
       )}

@@ -23,6 +23,7 @@ function photo(over: Partial<Photo> & { at?: number | null } = {}): Photo {
     regionId: 'yurihonjo',
     driveFileId: `d-${id}`,
     originalFilename: `${id}.jpg`,
+    title: '',
     mimeType: 'image/jpeg',
     latitude: 39.3853,
     longitude: 140.0488,

@@ -131,7 +131,13 @@ export class GoogleDriveGateway implements DriveGateway {
 
   deleteFile(fileId: string): Promise<void> {
     return this.run('deleteFile', async (api) => {
-      await api.files.delete({ fileId });
+      try {
+        await api.files.delete({ fileId });
+      } catch (e) {
+        // 既に無いファイルは削除済みとして扱う（再実行で同じ結果になるように）。
+        if (status(e) === 404) return;
+        throw e;
+      }
     });
   }
 

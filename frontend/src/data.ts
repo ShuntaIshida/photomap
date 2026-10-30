@@ -22,6 +22,8 @@ export interface Photo {
   regionId: string;
   driveFileId: string;
   originalFilename: string;
+  /** 表示用タイトル（Firestoreのtitle）。未設定は空文字で、その場合はoriginalFilenameを表示する。 */
+  title: string;
   mimeType: string;
   latitude: number | null;
   longitude: number | null;
@@ -37,6 +39,9 @@ export interface Photo {
   locationSource: 'exif' | 'manual';
   thumbnailDriveFileId?: string;
 }
+
+/** 一覧・詳細・マーカーで表示する名前。タイトル未設定なら従来のファイル名。 */
+export const photoName = (p: Pick<Photo, 'title' | 'originalFilename'>) => p.title || p.originalFilename;
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const toDate = (v: unknown): Date | null =>
@@ -67,6 +72,7 @@ function parsePhoto(id: string, d: DocumentData): Photo | null {
     regionId: d.regionId,
     driveFileId: typeof d.driveFileId === 'string' ? d.driveFileId : '',
     originalFilename: typeof d.originalFilename === 'string' ? d.originalFilename : id,
+    title: typeof d.title === 'string' ? d.title : '',
     mimeType: typeof d.mimeType === 'string' ? d.mimeType : '',
     latitude: hasGps ? d.latitude : null,
     longitude: hasGps ? d.longitude : null,
