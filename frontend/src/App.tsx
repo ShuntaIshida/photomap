@@ -6,6 +6,7 @@ import { useAuth } from './auth';
 import { API_BASE, usePhotos, useRegions, type Photo } from './data';
 import { originalUrl, thumbnailUrl } from './lib/photoUrls';
 import type { PhotoPoint } from './lib/photoGroups';
+import { loadMapType, MAP_TYPE_IDS, saveMapType } from './lib/mapType';
 import { uploadAvailability } from './lib/uploadAvailability';
 import ClusterSheet from './photoMap/ClusterSheet';
 import { PhotoLayer, type FocusRequest } from './photoMap/PhotoLayer';
@@ -77,6 +78,26 @@ function RegionViewport({ center, zoom }: { center: LatLng; zoom: number }) {
     map?.setCenter({ lat: center.lat, lng: center.lng });
     map?.setZoom(zoom);
   }, [map, center.lat, center.lng, zoom]);
+  return null;
+}
+
+// 標準の地図タイプ切替を右上に出し、選択をlocalStorageに保存・復元する（中心・ズームには触れない）。
+function MapTypeControl() {
+  const map = useMap();
+  useEffect(() => {
+    if (!map) return;
+    map.setMapTypeId(loadMapType());
+    map.setOptions({
+      mapTypeControl: true,
+      mapTypeControlOptions: {
+        position: google.maps.ControlPosition.TOP_RIGHT,
+        style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
+        mapTypeIds: [...MAP_TYPE_IDS],
+      },
+    });
+    const listener = map.addListener('maptypeid_changed', () => saveMapType(map.getMapTypeId()));
+    return () => listener.remove();
+  }, [map]);
   return null;
 }
 
@@ -171,7 +192,6 @@ function Photomap() {
         <header className="topbar">
           <div className="wordmark"><span>PHOTO</span>MAP</div>
           <div className="topbar-right">
-            <span className="edition-label">FIELDWORK ATLAS <span>2026</span></span>
             <UserMenu />
           </div>
         </header>
@@ -276,6 +296,7 @@ function Photomap() {
                   fullscreenControl
                   className="google-map"
                 >
+                  <MapTypeControl />
                   <RegionViewport center={region.defaultCenter} zoom={region.defaultZoom} />
                   <PhotoLayer
                     photos={visiblePhotos}
