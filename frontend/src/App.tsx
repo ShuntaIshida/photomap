@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { APIProvider, Map, useMap } from '@vis.gl/react-google-maps';
 import { ArrowDownUp, Camera, ImagePlus, LogOut, MapPin, Search } from 'lucide-react';
-import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
 import { API_BASE, photoName, usePhotos, useRegions, type Photo } from './data';
 import { originalUrl, thumbnailUrl } from './lib/photoUrls';
@@ -115,7 +115,6 @@ function RegionMissing({ loading = false }: { loading?: boolean }) {
 
 function Photomap() {
   const { slug = '' } = useParams();
-  const location = useLocation();
   // Driveから取得した一覧はURLの有効性判定にのみ使い、画面には表示しない。
   const { regions, loading: regionsLoading } = useRegions();
   const region = regions.find((item) => item.slug === slug);
@@ -368,9 +367,7 @@ function Photomap() {
           </section>
         </div>
         <footer className="statusbar">
-          <span className="status-location">{location.pathname.replace(import.meta.env.BASE_URL, '/')}</span>
           <span className="status-copyright">© Shunta Ishida</span>
-          <span className="status-region">{region.prefecture ? <>{region.prefecture} <b>·</b> JAPAN</> : 'JAPAN'}</span>
         </footer>
       </section>
       {uploadOpen && canUpload && (
