@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { APIProvider, Map, Marker, useMap } from '@vis.gl/react-google-maps';
-import { ArrowDownUp, Camera, LogOut, MapPin, Search } from 'lucide-react';
+import { ArrowDownUp, Camera, ImagePlus, LogOut, MapPin, Search } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
-import { usePhotos, useRegions, type Photo } from './data';
+import { API_BASE, usePhotos, useRegions, type Photo } from './data';
 import type { LatLng } from './regionList';
+import UploadDialog from './UploadDialog';
 
 const dateFormat = new Intl.DateTimeFormat('ja-JP', {
   dateStyle: 'medium',
@@ -125,6 +126,10 @@ function Photomap() {
   const { photos, loading: photosLoading, error: photosError } = usePhotos(region?.id ?? null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [keyword, setKeyword] = useState('');
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const { user, loading: authLoading, configured: authConfigured } = useAuth();
+  // 閲覧はログイン不要。アップロードだけログイン必須（サーバーでもFirebaseトークンを検証する）。
+  const canUpload = Boolean(user) && Boolean(API_BASE);
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
   const visiblePhotos = useMemo(() => {
@@ -181,6 +186,21 @@ function Photomap() {
                 <ArrowDownUp size={17} />
               </button>
             </div>
+            <button
+              className="upload-open"
+              type="button"
+              onClick={() => setUploadOpen(true)}
+              disabled={!canUpload}
+              title={user ? '写真をアップロード' : 'アップロードにはログインが必要です'}
+            >
+              <ImagePlus size={16} />
+              <span>写真を追加</span>
+            </button>
+            {!user && (
+              <p className="upload-hint">
+                {authLoading ? 'ログイン状態を確認中…' : authConfigured ? '写真を追加するには、右上の「ログイン」からGoogleアカウントでログインしてください。' : 'ログインを利用できない設定です（Firebase未設定）。'}
+              </p>
+            )}
             <label className="search-box">
               <Search size={16} aria-hidden="true" />
               <input
@@ -201,11 +221,24 @@ function Photomap() {
                       aria-pressed={p.id === selectedId}
                       onClick={() => setSelectedId(p.id)}
                     >
-                      <span className="photo-name">{p.originalFilename}</span>
-                      <span className="photo-meta">{formatCaptured(p)}</span>
-                      <span className="photo-meta">
-                        {p.uploaderName || '投稿者不明'}
-                        {!p.hasGps && ' ・ 位置未設定'}
+                      {p.thumbnailDriveFileId && API_BASE ? (
+                        <img
+                          className="photo-thumb"
+                          src={`${API_BASE}/photos/${encodeURIComponent(p.id)}/thumbnail`}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      ) : (
+                        <span className="photo-thumb photo-thumb-empty" aria-hidden="true"><Camera size={16} /></span>
+                      )}
+                      <span className="photo-text">
+                        <span className="photo-name">{p.originalFilename}</span>
+                        <span className="photo-meta">{formatCaptured(p)}</span>
+                        <span className="photo-meta">
+                          {p.uploaderName || '投稿者不明'}
+                          {!p.hasGps && ' ・ 位置未設定'}
+                        </span>
                       </span>
                     </button>
                   </li>
@@ -262,6 +295,15 @@ function Photomap() {
           <span>{region.prefecture ? <>{region.prefecture} <b>·</b> JAPAN</> : 'JAPAN'}</span>
         </footer>
       </section>
+      {uploadOpen && canUpload && (
+        <UploadDialog
+          regionSlug={region.slug}
+          regionName={region.name}
+          onClose={() => setUploadOpen(false)}
+          // アップロードされた写真はFirestoreの購読で一覧・地図に現れる。選択状態にして地図をそこへ寄せる。
+          onUploaded={setSelectedId}
+        />
+      )}
     </main>
   );
 }

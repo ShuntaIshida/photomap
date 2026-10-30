@@ -3,6 +3,8 @@ import { getAuth } from 'firebase-admin/auth';
 export interface AuthUser {
   uid: string;
   admin: boolean;
+  /** 検証済みトークンの表示名（メールアドレスは公開データに入れないため含めない）。 */
+  name: string;
 }
 
 export interface AuthService {
@@ -20,7 +22,11 @@ export class FirebaseAuthService implements AuthService {
 
   async verifyIdToken(token: string): Promise<AuthUser> {
     const decoded = await getAuth().verifyIdToken(token, true);
-    return { uid: decoded.uid, admin: decoded.admin === true || this.adminUids.has(decoded.uid) };
+    return {
+      uid: decoded.uid,
+      admin: decoded.admin === true || this.adminUids.has(decoded.uid),
+      name: typeof decoded.name === 'string' ? decoded.name : '',
+    };
   }
 
   async isAdmin(uid: string): Promise<boolean> {

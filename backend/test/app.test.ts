@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
+import { DRIVE_SCOPE } from '../src/services/googleOAuth.js';
 import { build } from './helpers.js';
 
 const bearer = (t: string) => ({ Authorization: `Bearer ${t}` });
@@ -76,12 +77,16 @@ describe('public / admin separation', () => {
     expect(res.body.ignored).toEqual([{ name: 'BadName', reason: 'invalid_slug' }]);
   });
 
-  it('status never exposes tokens', async () => {
+  it('status never exposes tokens and reports write access', async () => {
     const ctx = build();
     await ctx.tokens.save('super-secret-refresh');
     const res = await request(ctx.app).get('/admin/drive/status').set(bearer('admin-token'));
     expect(res.body.authorized).toBe(true);
+    expect(res.body.writeAccess).toBe(true);
     expect(JSON.stringify(res.body)).not.toContain('super-secret-refresh');
+    ctx.gateway.grantedScopes = async () => ['https://www.googleapis.com/auth/drive.metadata.readonly'];
+    const old = await request(ctx.app).get('/admin/drive/status').set(bearer('admin-token'));
+    expect(old.body.writeAccess).toBe(false);
   });
 });
 
@@ -137,9 +142,9 @@ describe('OAuth authorization code flow', () => {
 
   it('rejects an unexpected or unverified Google account', async () => {
     for (const exchange of [
-      { refreshToken: 'x', email: 'other@example.com', emailVerified: true },
-      { refreshToken: 'x', email: 'owner@example.ac.jp', emailVerified: false },
-      { refreshToken: 'x', email: null, emailVerified: false },
+      { refreshToken: 'x', email: 'other@example.com', emailVerified: true, scopes: [DRIVE_SCOPE] },
+      { refreshToken: 'x', email: 'owner@example.ac.jp', emailVerified: false, scopes: [DRIVE_SCOPE] },
+      { refreshToken: 'x', email: null, emailVerified: false, scopes: [DRIVE_SCOPE] },
     ]) {
       const ctx = build();
       ctx.google.exchange = exchange;
@@ -148,6 +153,15 @@ describe('OAuth authorization code flow', () => {
       expect(res.status).toBe(403);
       expect(await ctx.tokens.get()).toBeNull();
     }
+  });
+
+  it('does not store a token when the Drive permission was unchecked on the consent screen', async () => {
+    const ctx = build();
+    ctx.google.exchange = { ...ctx.google.exchange, scopes: ['openid', 'email'] };
+    const { state } = await startFlow(ctx);
+    const res = await request(ctx.app).get('/oauth/google/callback').query({ code: 'c', state });
+    expect(res.status).toBe(400);
+    expect(await ctx.tokens.get()).toBeNull();
   });
 
   it('fails when Google returns no refresh token', async () => {

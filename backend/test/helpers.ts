@@ -1,12 +1,16 @@
-import type { Config } from '../src/config.js';
+import { Readable } from 'node:stream';
 import { createApp } from '../src/app.js';
+import type { Config } from '../src/config.js';
 import { errors } from '../src/errors.js';
 import type { AuthService, AuthUser } from '../src/services/authService.js';
 import { DriveAuthorization } from '../src/services/driveAuthorization.js';
-import type { DriveFolder, DriveGateway } from '../src/services/driveGateway.js';
-import type { GoogleOAuth, TokenExchangeResult } from '../src/services/googleOAuth.js';
+import type { DriveFolder, DriveGateway, UploadFileParams } from '../src/services/driveGateway.js';
+import { DRIVE_SCOPE, type GoogleOAuth, type TokenExchangeResult } from '../src/services/googleOAuth.js';
+import { PhotoUploadService } from '../src/services/photoUpload.js';
 import { RegionService } from '../src/services/regions.js';
+import { UploadLimiter } from '../src/services/uploadLimiter.js';
 import { MemoryOAuthStateStore } from '../src/stores/oauthStateStore.js';
+import { MemoryPhotoRepository } from '../src/stores/photoRepository.js';
 import { MemoryRefreshTokenStore } from '../src/stores/refreshTokenStore.js';
 
 export const config: Config = {
@@ -23,8 +27,9 @@ export const config: Config = {
 };
 
 export const users: Record<string, AuthUser> = {
-  'admin-token': { uid: 'admin-uid', admin: true },
-  'user-token': { uid: 'user-uid', admin: false },
+  'admin-token': { uid: 'admin-uid', admin: true, name: 'Admin' },
+  'user-token': { uid: 'user-uid', admin: false, name: 'Test User' },
+  'user2-token': { uid: 'user2-uid', admin: false, name: 'Second User' },
 };
 
 export class FakeAuth implements AuthService {
@@ -40,7 +45,13 @@ export class FakeAuth implements AuthService {
 }
 
 export class FakeGoogle implements GoogleOAuth {
-  exchange: TokenExchangeResult = { refreshToken: 'refresh-token-value', email: 'owner@example.ac.jp', emailVerified: true };
+  exchange: TokenExchangeResult = {
+    refreshToken: 'refresh-token-value',
+    email: 'owner@example.ac.jp',
+    emailVerified: true,
+    scopes: ['openid', 'email', DRIVE_SCOPE],
+  };
+  grantedScopesResult: string[] = [DRIVE_SCOPE];
   lastVerifier: string | null = null;
   buildAuthUrl({ state, codeChallenge }: { state: string; codeChallenge: string }) {
     return `https://accounts.example.test/auth?state=${state}&code_challenge=${codeChallenge}`;
@@ -52,12 +63,16 @@ export class FakeGoogle implements GoogleOAuth {
   clientFor(): never {
     throw new Error('not used');
   }
+  async grantedScopes() {
+    return this.grantedScopesResult;
+  }
 }
 
-export class FakeGateway implements DriveGateway {
+/** 書き込み系は未実装のスタブ。必要なテストだけが継承して上書きする。 */
+export class StubGateway implements DriveGateway {
   folders: DriveFolder[] = [];
   calls = 0;
-  constructor(private readonly tokens: MemoryRefreshTokenStore) {}
+  constructor(protected readonly tokens: MemoryRefreshTokenStore) {}
   async isAuthorized() {
     return (await this.tokens.get()) !== null;
   }
@@ -66,16 +81,76 @@ export class FakeGateway implements DriveGateway {
     if (!(await this.tokens.get())) throw errors.driveNotAuthorized();
     return this.folders;
   }
+  async grantedScopes() {
+    return [DRIVE_SCOPE];
+  }
+  async uploadFile(_p: UploadFileParams): Promise<string> {
+    throw new Error('not implemented');
+  }
+  async deleteFile(_id: string): Promise<void> {
+    throw new Error('not implemented');
+  }
+  async ensureChildFolder(_parent: string, _name: string): Promise<string> {
+    throw new Error('not implemented');
+  }
+  async openFile(_id: string): Promise<Readable> {
+    throw new Error('not implemented');
+  }
 }
 
-export function build() {
+export interface RecordedUpload extends UploadFileParams {
+  id: string;
+}
+
+/** Driveの書き込み・読み出しを記録するインメモリ実装。 */
+export class FakeGateway extends StubGateway {
+  uploads: RecordedUpload[] = [];
+  deleted: string[] = [];
+  subfolders = new Map<string, string>();
+  files = new Map<string, Buffer>();
+  /** n番目(1始まり)のuploadFileを失敗させる。 */
+  failUploadNumber: number | null = null;
+  private seq = 0;
+
+  override async uploadFile(p: UploadFileParams) {
+    if (this.failUploadNumber === this.uploads.length + 1) {
+      this.failUploadNumber = null;
+      throw errors.driveUnavailable();
+    }
+    const id = `drive-file-${++this.seq}`;
+    this.uploads.push({ ...p, id });
+    this.files.set(id, p.data);
+    return id;
+  }
+  override async deleteFile(id: string) {
+    this.deleted.push(id);
+    this.files.delete(id);
+  }
+  override async ensureChildFolder(parent: string, name: string) {
+    const key = `${parent}/${name}`;
+    if (!this.subfolders.has(key)) this.subfolders.set(key, `thumbs-of-${parent}`);
+    return this.subfolders.get(key)!;
+  }
+  override async openFile(id: string) {
+    const data = this.files.get(id);
+    if (!data) throw errors.driveParentInaccessible();
+    return Readable.from(data);
+  }
+}
+
+export function build(options: { limiter?: UploadLimiter; extract?: PhotoUploadServiceExtract } = {}) {
   const tokens = new MemoryRefreshTokenStore();
   const states = new MemoryOAuthStateStore();
   const auth = new FakeAuth();
   const google = new FakeGoogle();
   const gateway = new FakeGateway(tokens);
   const regions = new RegionService(gateway);
+  const photos = new MemoryPhotoRepository();
+  const uploads = new PhotoUploadService({ gateway, regions, photos, extract: options.extract });
+  const uploadLimiter = options.limiter ?? new UploadLimiter();
   const authorization = new DriveAuthorization({ config, google, states, tokens, isAdmin: (uid) => auth.isAdmin(uid) });
-  const app = createApp({ config, auth, authorization, gateway, regions });
-  return { app, tokens, states, auth, google, gateway, regions };
+  const app = createApp({ config, auth, authorization, gateway, regions, uploads, photos, uploadLimiter });
+  return { app, tokens, states, auth, google, gateway, regions, photos };
 }
+
+type PhotoUploadServiceExtract = ConstructorParameters<typeof PhotoUploadService>[0]['extract'];

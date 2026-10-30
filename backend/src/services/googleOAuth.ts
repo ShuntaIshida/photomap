@@ -2,13 +2,18 @@ import { createHash, randomBytes } from 'node:crypto';
 import { CodeChallengeMethod, OAuth2Client } from 'google-auth-library';
 import type { Config } from '../config.js';
 
-// openid/email: 認可したGoogleアカウントの確認用。drive.metadata.readonly: フォルダー名の列挙のみ（内容の読み取り・書き込み不可）。
-export const OAUTH_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/drive.metadata.readonly'] as const;
+// openid/email: 認可したアカウントの確認用。
+// drive: 手動作成済みの地域フォルダーの列挙と、そこへの写真保存に必要。
+// drive.fileはアプリが作成・Pickerで開いたファイルにしか触れないため、既存フォルダーへの保存と「新フォルダーを作るだけでURLが有効」を両立できない。
+export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
+export const OAUTH_SCOPES = ['openid', 'email', DRIVE_SCOPE] as const;
 
 export interface TokenExchangeResult {
   refreshToken: string | null;
   email: string | null;
   emailVerified: boolean;
+  /** 実際に付与されたスコープ（同意画面で個別に外されうる）。 */
+  scopes: string[];
 }
 
 export interface GoogleOAuth {
@@ -16,6 +21,8 @@ export interface GoogleOAuth {
   exchangeCode(params: { code: string; codeVerifier: string }): Promise<TokenExchangeResult>;
   /** リフレッシュトークンから自動更新されるクライアントを返す。 */
   clientFor(refreshToken: string): OAuth2Client;
+  /** 保存済みトークンに実際に付与されているスコープ。取得できなければ空配列。 */
+  grantedScopes(refreshToken: string): Promise<string[]>;
 }
 
 export class GoogleOAuthClient implements GoogleOAuth {
@@ -56,7 +63,23 @@ export class GoogleOAuthClient implements GoogleOAuth {
       email = payload?.email?.toLowerCase() ?? null;
       emailVerified = payload?.email_verified === true;
     }
-    return { refreshToken: tokens.refresh_token ?? null, email, emailVerified };
+    return {
+      refreshToken: tokens.refresh_token ?? null,
+      email,
+      emailVerified,
+      scopes: tokens.scope?.split(' ').filter(Boolean) ?? [],
+    };
+  }
+
+  async grantedScopes(refreshToken: string): Promise<string[]> {
+    try {
+      const client = this.clientFor(refreshToken);
+      const { token } = await client.getAccessToken();
+      if (!token) return [];
+      return (await client.getTokenInfo(token)).scopes;
+    } catch {
+      return [];
+    }
   }
 
   clientFor(refreshToken: string): OAuth2Client {

@@ -1,16 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { errors } from '../src/errors.js';
-import type { DriveFolder, DriveGateway } from '../src/services/driveGateway.js';
+import type { DriveFolder } from '../src/services/driveGateway.js';
 import { RegionService } from '../src/services/regions.js';
+import { MemoryRefreshTokenStore } from '../src/stores/refreshTokenStore.js';
+import { StubGateway } from './helpers.js';
 
-class FlakyGateway implements DriveGateway {
-  folders: DriveFolder[] = [{ id: 'f1', name: 'yurihonjo' }];
+class FlakyGateway extends StubGateway {
+  override folders: DriveFolder[] = [{ id: 'f1', name: 'yurihonjo' }];
   failing = false;
-  calls = 0;
-  async isAuthorized() {
-    return true;
+  constructor() {
+    super(new MemoryRefreshTokenStore('token'));
   }
-  async listChildFolders() {
+  override async listChildFolders() {
     this.calls++;
     if (this.failing) throw errors.driveUnavailable();
     return this.folders;

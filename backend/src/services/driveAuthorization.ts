@@ -3,7 +3,7 @@ import { AppError } from '../errors.js';
 import { log } from '../logger.js';
 import type { OAuthStateStore } from '../stores/oauthStateStore.js';
 import type { RefreshTokenStore } from '../stores/refreshTokenStore.js';
-import { generatePkce, generateState, type GoogleOAuth } from './googleOAuth.js';
+import { DRIVE_SCOPE, generatePkce, generateState, type GoogleOAuth } from './googleOAuth.js';
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -50,6 +50,10 @@ export class DriveAuthorization {
     }
     if (!result.refreshToken) {
       throw new AppError(400, 'no_refresh_token', 'Google did not return a refresh token; revoke access and retry');
+    }
+    // 同意画面でDriveを個別に外された場合は保存せず、誤った「認可済み」状態を作らない。
+    if (!result.scopes.includes(DRIVE_SCOPE)) {
+      throw new AppError(400, 'insufficient_scope', 'The Google Drive permission was not granted; re-authorize and allow it');
     }
 
     await this.deps.tokens.save(result.refreshToken);

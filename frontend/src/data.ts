@@ -12,7 +12,7 @@ import { buildRegions, resolveSlugs, type Region } from './regionList';
 
 export type { Region } from './regionList';
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
 const FETCH_TIMEOUT_MS = 8000;
 
 /** photos/{photoId}: 書き込みは将来のCloud Run APIのみ。regionIdは地域のslugと対応する。 */

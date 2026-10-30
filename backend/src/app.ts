@@ -7,8 +7,12 @@ import { log } from './logger.js';
 import type { AuthService, AuthUser } from './services/authService.js';
 import type { DriveAuthorization } from './services/driveAuthorization.js';
 import type { DriveGateway } from './services/driveGateway.js';
-import { OAUTH_SCOPES } from './services/googleOAuth.js';
-import type { RegionService } from './services/regions.js';
+import { DRIVE_SCOPE, OAUTH_SCOPES } from './services/googleOAuth.js';
+import { parseUploadRequest } from './services/multipart.js';
+import type { PhotoUploadService } from './services/photoUpload.js';
+import { SLUG_PATTERN, type RegionService } from './services/regions.js';
+import type { UploadLimiter } from './services/uploadLimiter.js';
+import type { PhotoRepository } from './stores/photoRepository.js';
 
 export interface AppDeps {
   config: Config;
@@ -16,7 +20,13 @@ export interface AppDeps {
   authorization: DriveAuthorization;
   gateway: DriveGateway;
   regions: RegionService;
+  uploads: PhotoUploadService;
+  photos: PhotoRepository;
+  uploadLimiter: UploadLimiter;
 }
+
+const PHOTO_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{32}$/;
+const THUMBNAIL_CACHE_MAX = 2000;
 
 const BEARER = /^Bearer ([A-Za-z0-9._-]+)$/;
 
@@ -50,9 +60,11 @@ const resultPage = (title: string) =>
   `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Photomap</title><body><h1>${title}</h1><p>このタブは閉じて構いません。</p></body></html>`;
 
 export function createApp(deps: AppDeps) {
-  const { config, auth, authorization, gateway, regions } = deps;
+  const { config, auth, authorization, gateway, regions, uploads, photos, uploadLimiter } = deps;
   const app = express();
   const allowedOrigins = new Set(config.corsAllowedOrigins);
+  // 写真ID→サムネイルDriveファイルID（不変）。Firestore読み取りを減らす。
+  const thumbnailIds = new Map<string, string>();
 
   app.disable('x-powered-by');
   app.use(helmet());
@@ -107,6 +119,74 @@ export function createApp(deps: AppDeps) {
     }
   });
 
+  // サムネイル配信（閲覧はログイン不要）。Driveのファイルは公開せず、Firestoreに登録済みのサムネイルだけを
+  // 写真ID経由でこのAPIが代理する。任意のDriveファイルIDは受け付けない。
+  app.get('/photos/:photoId/thumbnail', async (req, res) => {
+    const photoId = String(req.params.photoId);
+    if (!PHOTO_ID.test(photoId)) throw errors.photoNotFound();
+    let fileId = thumbnailIds.get(photoId);
+    if (!fileId) {
+      fileId = (await photos.getThumbnailFileId(photoId)) ?? undefined;
+      if (!fileId) throw errors.photoNotFound();
+      if (thumbnailIds.size >= THUMBNAIL_CACHE_MAX) thumbnailIds.clear();
+      thumbnailIds.set(photoId, fileId);
+    }
+    const stream = await gateway.openFile(fileId);
+    // 写真IDは内容ハッシュ由来でサムネイルは不変のため長期キャッシュしてDrive APIへの問い合わせを減らす。
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    // GitHub Pagesからの<img>読み込みを許可する（helmetの既定は same-origin）。
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
+  });
+
+  // --- ログイン済みユーザー ---
+  // 写真のアップロード。保存先フォルダーはslugからサーバーが解決する（クライアントのフォルダーIDは受け付けない）。
+  app.post('/regions/:slug/photos', noStore, authenticate(auth), async (req, res) => {
+    const user = res.locals.user as AuthUser;
+    const slug = String(req.params.slug);
+    if (!SLUG_PATTERN.test(slug)) throw errors.regionNotFound();
+    const release = uploadLimiter.acquire(user.uid);
+    try {
+      const { file, filename, thumbnail } = await parseUploadRequest(req);
+      const { photoId } = await uploads.upload({
+        uid: user.uid,
+        uploaderName: user.name.trim().slice(0, 100) || 'ユーザー',
+        slug,
+        file,
+        filename,
+        thumbnail,
+      });
+      res.status(201).json({ photoId });
+    } finally {
+      release();
+    }
+  });
+
+  // --- ログイン済みユーザー ---
+  // 写真のアップロード。保存先フォルダーはslugからサーバーが解決する（クライアントのフォルダーIDは受け付けない）。
+  app.post('/regions/:slug/photos', noStore, authenticate(auth), async (req, res) => {
+    const user = res.locals.user as AuthUser;
+    const slug = String(req.params.slug);
+    if (!SLUG_PATTERN.test(slug)) throw errors.regionNotFound();
+    const release = uploadLimiter.acquire(user.uid);
+    try {
+      const { file, filename, thumbnail } = await parseUploadRequest(req);
+      const { photoId } = await uploads.upload({
+        uid: user.uid,
+        uploaderName: user.name.trim().slice(0, 100) || 'ユーザー',
+        slug,
+        file,
+        filename,
+        thumbnail,
+      });
+      res.status(201).json({ photoId });
+    } finally {
+      release();
+    }
+  });
+
   // --- 管理者のみ ---
   const admin = express.Router();
   admin.use(noStore, authenticate(auth), requireAdmin);
@@ -119,7 +199,15 @@ export function createApp(deps: AppDeps) {
   });
 
   admin.get('/drive/status', async (_req, res) => {
-    res.json({ authorized: await gateway.isAuthorized(), scopes: OAUTH_SCOPES });
+    const authorized = await gateway.isAuthorized();
+    const granted = authorized ? await gateway.grantedScopes() : [];
+    // writeAccessがfalseの場合は写真保存のために再認可が必要。
+    res.json({
+      authorized,
+      scopes: OAUTH_SCOPES,
+      grantedScopes: granted,
+      writeAccess: granted.includes(DRIVE_SCOPE),
+    });
   });
 
   admin.get('/drive/folders', async (_req, res) => {

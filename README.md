@@ -11,6 +11,7 @@ Photomap is a collaborative, location-based photo mapping web application for fi
 - GitHub Pages SPA fallback for direct links and page reloads
 - Google sign-in / sign-out with Firebase Authentication (popup flow)
 - Per-region photo list and map markers read from Cloud Firestore (public read, no login required)
+- Photo upload (login required): select multiple JPEG/HEIC photos, GPS is read from EXIF, photos without GPS are rejected with a reason, originals are stored in the matching Google Drive region folder via the Cloud Run API, and a browser-safe JPEG thumbnail is generated (HEIC is converted in the browser)
 
 ## Architecture
 
@@ -31,7 +32,7 @@ Photomap is a collaborative, location-based photo mapping web application for fi
 
 ## Status
 
-Phases 1 and 2 are implemented. The backend foundation (Firebase token verification, admin-only Google Drive OAuth, Drive region folder listing) is implemented but not deployed; photo uploads and Firestore region sync are planned for later phases.
+Phases 1 and 2 are implemented. The Cloud Run backend (Firebase token verification, admin-only Google Drive OAuth, Drive region folder listing, photo upload and thumbnail delivery) is implemented; Phase 3 photo upload (JPEG/HEIC with GPS) is implemented and needs the Drive write scope to be re-authorized after deployment (see [backend/README.md](backend/README.md)). Photos without GPS, manual placement, and Firestore region sync are planned for later.
 
 ## Local development
 
@@ -88,18 +89,18 @@ Removing or renaming a Drive folder only hides that region's page; its `photos` 
 
 Planned (not implemented yet): the Cloud Run backend will also sync the Drive folder list into Firestore `regions` (folder IDs, ordering). Today the Drive list is read live from `GET /regions` and Firestore `regions` documents are optional display metadata for new folders. Note that `regions` is publicly readable, so `driveFolderId` is visible to clients; the folder itself stays private.
 
-`photos/{photoId}`: `regionId` (a region slug), `driveFileId`, `originalFilename`, `mimeType`, `latitude`, `longitude`, `capturedAt` (Timestamp), `capturedAtTimeZoneKnown` (boolean; `false` when EXIF has no offset), `uploadedAt` (Timestamp), `uploaderUid`, `uploaderName`, `width`, `height`, `hasGps`, `locationSource` (`exif` | `manual`), optional `thumbnailDriveFileId`. Markers are drawn only when `hasGps` is `true` and both coordinates are numbers.
+`photos/{photoId}`: `regionId` (a region slug), `driveFileId`, `originalFilename`, `mimeType`, `latitude`, `longitude`, `capturedAt` (Timestamp), `capturedAtTimeZoneKnown` (boolean; `false` when EXIF has no offset), `uploadedAt` (Timestamp), `uploaderUid`, `uploaderName`, `width`, `height`, `hasGps`, `locationSource` (`exif` | `manual`), optional `thumbnailDriveFileId`, and (written by the upload API) `contentHash` (SHA-256 of the original) and `sizeBytes`. The document ID is `<slug>-<first 32 hex chars of contentHash>`, so the same photo cannot be uploaded twice to one region. Markers are drawn only when `hasGps` is `true` and both coordinates are numbers. `uploaderUid` comes from the verified Firebase token and the location/time from the original file's EXIF, never from client-supplied fields.
 
 ### Security Rules
 
-`regions` and `photos` are readable by anyone (map viewing needs no login) and **not writable from clients**. Registration and updates will go through the Firebase-token-verified Cloud Run API using the Admin SDK in a later phase. Until then, add test documents from the Firebase Console.
+`regions` and `photos` are readable by anyone (map viewing needs no login) and **not writable from clients**. Registration goes through the Firebase-token-verified Cloud Run API (`POST /regions/<slug>/photos`) using the Admin SDK; the rules themselves need no change for uploads. Photo documents expose `driveFileId`/`thumbnailDriveFileId`, but the Drive files are private and can only be viewed through `GET /photos/<id>/thumbnail` on the API.
 
 ### Verifying locally
 
 1. Fill in `frontend/.env.local`, then run `npm run dev` in `frontend/`.
 2. Open `http://localhost:5173/yurihonjo`. With no Firestore data, the empty state (`まだ写真がありません`, 0 PHOTOS) is shown.
 3. Click the guest button in the top right, sign in with Google in the popup; your name and avatar replace it. The logout icon signs you out.
-4. In the Console, add a `photos` document with `regionId: "yurihonjo"`, `hasGps: true`, numeric `latitude`/`longitude`, and Timestamp `capturedAt`/`uploadedAt`. It appears in the list and as a marker; selecting either highlights both.
+4. Sign in and use "写真を追加" to upload a GPS-tagged JPEG/HEIC (requires the deployed API with Drive write access; see [backend/README.md](backend/README.md)). Or, for a quick check without the API, in the Console add a `photos` document with `regionId: "yurihonjo"`, `hasGps: true`, numeric `latitude`/`longitude`, and Timestamp `capturedAt`/`uploadedAt`. It appears in the list and as a marker; selecting either highlights both.
 
 ## GitHub Pages
 

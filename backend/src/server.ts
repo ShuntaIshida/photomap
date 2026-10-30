@@ -6,8 +6,11 @@ import { FirebaseAuthService } from './services/authService.js';
 import { DriveAuthorization } from './services/driveAuthorization.js';
 import { GoogleDriveGateway } from './services/driveGateway.js';
 import { GoogleOAuthClient } from './services/googleOAuth.js';
+import { PhotoUploadService } from './services/photoUpload.js';
 import { RegionService } from './services/regions.js';
+import { UploadLimiter } from './services/uploadLimiter.js';
 import { FirestoreOAuthStateStore } from './stores/oauthStateStore.js';
+import { FirestorePhotoRepository } from './stores/photoRepository.js';
 import { SecretManagerRefreshTokenStore } from './stores/refreshTokenStore.js';
 
 const config = loadConfig();
@@ -19,12 +22,17 @@ const google = new GoogleOAuthClient(config);
 const auth = new FirebaseAuthService(config.adminUids);
 const tokens = new SecretManagerRefreshTokenStore(config.firebaseProjectId, config.refreshTokenSecretName);
 const gateway = new GoogleDriveGateway(config, google, tokens);
+const regions = new RegionService(gateway);
+const photos = new FirestorePhotoRepository();
 
 const app = createApp({
   config,
   auth,
   gateway,
-  regions: new RegionService(gateway),
+  regions,
+  photos,
+  uploads: new PhotoUploadService({ gateway, regions, photos }),
+  uploadLimiter: new UploadLimiter(),
   authorization: new DriveAuthorization({
     config,
     google,

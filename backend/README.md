@@ -1,8 +1,8 @@
 # Photomap API (Cloud Run)
 
-Node.js 22 + TypeScript + Express 5 のバックエンドです。現段階の役割は **Google Driveの地域フォルダー一覧を安全に取得できる基盤**の提供のみです。
+Node.js 22 + TypeScript + Express 5 のバックエンドです。役割は、Firebase IDトークンの検証、Google Driveの地域フォルダー一覧の提供、写真のアップロード（Driveへの保存とFirestoreへの登録）、サムネイルの代理配信です。
 
-実装していないもの（今回の範囲外）: 写真アップロード、Driveへの書き込み、Firestoreへの地域同期、Cloud Runへのデプロイ。既存のFirestoreデータは変更しません（新規コレクション `adminOauthStates` のみ作成します）。
+実装していないもの: Firestoreへの地域同期、GPSのない写真の手動位置指定、原本の配信。既存のFirestoreデータは変更しません（`adminOauthStates` を新規に作成し、`photos` はアップロード時に新規ドキュメントを作るだけです）。
 
 ## エンドポイント
 
@@ -11,11 +11,13 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。現段階の�
 | 公開 | `GET /health` | なし | ヘルスチェック |
 | 公開（stateで保護） | `GET /oauth/google/callback` | 管理者が開始時に発行した1回限りの`state` | Googleからのリダイレクト受け口 |
 | 公開 | `GET /regions` | なし | Drive直下フォルダー由来の地域slug一覧（`{regions:[{slug}]}`）。フォルダーIDは返さない |
+| 公開 | `GET /photos/:photoId/thumbnail` | なし | Firestoreに登録済みの写真のサムネイルJPEGをDriveから代理配信。Driveファイル自体は公開しない |
+| ログイン済み | `POST /regions/:slug/photos` | Firebase IDトークン | 写真1枚のアップロード（multipart: `file`=原本, `thumbnail`=JPEG）。下記「写真アップロード」参照 |
 | 管理者 | `POST /admin/drive/oauth/start` | IDトークン＋管理者 | 認可URLを返す（`{authorizationUrl}`） |
-| 管理者 | `GET /admin/drive/status` | 同上 | 認可済みか（トークンは返さない） |
+| 管理者 | `GET /admin/drive/status` | 同上 | 認可済みか、付与スコープ、`writeAccess`（写真保存に必要な書き込み権限があるか）。トークンは返さない |
 | 管理者 | `GET /admin/drive/folders` | 同上 | 地域一覧（フォルダーID付き）と除外されたフォルダー |
 
-- Driveが未認可なら `503 drive_not_authorized`、認可失効なら `503 drive_authorization_invalid`、親フォルダーに触れない場合は `502 drive_parent_inaccessible`。エラー形式は `{error:{code,message}}`。
+- Driveが未認可なら `503 drive_not_authorized`、認可失効なら `503 drive_authorization_invalid`、書き込み権限が無ければ `503 drive_scope_insufficient`、親フォルダーに触れない場合は `502 drive_parent_inaccessible`。エラー形式は `{error:{code,message}}`。
 - フォルダー名がそのままslugです。`^[a-z0-9]+(-[a-z0-9]+)*$`（64文字以内）に合わないフォルダーと同名フォルダーは地域として採用せず、管理者向けAPIの`ignored`に出ます。
 - `/regions`は、Webアプリが「地域URLが有効か」を判定するための正本としてログイン不要で公開しています（閉覧はログイン不要のため）。フロントはこの一覧を画面に地域一覧として表示しません。返すのはslugのみです。Drive APIを保護するため、結果は60秒キャッシュし、同時リクエストは1回のDrive呼び出しにまとめます。Driveへの取得に失敗した場合は直近の成功結果を最大24時間返し（地域一覧が空にならない）、失敗直後の10秒は再試行しません。成功結果が一度も無い場合のみエラー（`503`等）を返します。管理者向けの`/admin/drive/folders`は常に最新を取得し、失敗をそのまま返します。フォルダー名をDriveで追加・削除・改名してから反映されるまでは最大60秒程度です。
 - 管理者判定は、検証済みIDトークンのカスタムクレーム `admin: true` または環境変数 `ADMIN_UIDS`（UID許可リスト）のみです。メールアドレスは判定に使いません。トークンは失効チェック付きで検証します。
@@ -42,28 +44,51 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。現段階の�
 - クライアントシークレットはCloud Runのシークレット参照（環境変数）、リフレッシュトークンはSecret Managerの `DRIVE_REFRESH_TOKEN_SECRET` の最新バージョンから読みます（60秒キャッシュ）。どちらもログ・レスポンスに出しません。ログにはクエリ文字列（`code`/`state`）も含めません。
 - CORSは `https://shuntaishida.github.io`（パスなしのオリジン）、`http://localhost:5173`、`http://127.0.0.1:5173` のみ許可します（`CORS_ALLOWED_ORIGINS`で上書き可、`*`は拒否）。
 
-## Driveスコープの調査と推奨
+## Driveスコープ（写真保存のため `drive` を使用）
 
-`drive.file`は非機密スコープで、「アプリが作成したファイル」と「Google Pickerなどでユーザーがアプリに共有したファイル」にしかアクセスできません。そのため、**ユーザーが手動で作成した`yurihonjo`/`nikaho`フォルダーを親フォルダー経由で列挙する用途には使えません**（公式: [Drive APIのスコープを選択する](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)）。
+`drive.file`は非機密スコープで、「アプリが作成したファイル」と「Google Pickerなどでユーザーがアプリに共有したファイル」にしかアクセスできません（公式: [Drive APIのスコープを選択する](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)）。このため、**ユーザーが手動で作成した`yurihonjo`/`nikaho`フォルダーの列挙も、その中への保存もできません**（親フォルダー経由で列挙するには別のスコープが必要で、既存フォルダーへの書き込みも`drive.file`ではアクセス権が足りない）。
 
-| 案 | スコープ | 区分 | 地域フォルダー列挙 | 権限の広さ |
+| 案 | スコープ | 区分 | 既存の手動フォルダーへの保存 | 備考 |
 | --- | --- | --- | --- | --- |
-| A | `drive.file` のみ | 非機密 | 手動作成フォルダーは不可。アプリ自身が作成したフォルダーなら可 | 最小 |
-| B | `drive.file` + Pickerで親フォルダーを選択 | 非機密 | 選択したフォルダー自体にはアクセスできるが、**その直下の手動作成フォルダーまで見える保証はない（要検証）** | 小 |
-| C | `drive.metadata.readonly` | 制限付き | 可（名前・IDなどのメタデータ。内容の読み取り・書き込みは不可） | 全ファイルのメタデータ閲覧 |
-| D | `drive.readonly` / `drive` | 制限付き | 可 | 内容の読み取り（D-2は書き込み）まで含み過大 |
+| A | `drive.file` のみ | 非機密 | 不可（アプリが作成したフォルダーのみ） | 既存フォルダー運用と両立しない |
+| B | `drive.file` + Picker | 非機密 | 地域フォルダーごとに管理者がPickerで選択すれば可 | 新しいフォルダーを作るたびに選択が必要で、「フォルダーを作るだけでURLが有効になり、すぐ投稿できる」運用と両立しない。挙動の検証も必要 |
+| C | `drive.metadata.readonly` | 制限付き | 不可（読み取りのみ） | **前フェーズの設定。写真保存には不足** |
+| D | **`drive`** | 制限付き | **可** | 現在の採用。権限は広い |
 
-**推奨（現段階）: 案C `drive.metadata.readonly`（+ `openid email`）。** 要件（手動作成済みフォルダーの列挙）を満たす最小のスコープで、内容の読み取りも書き込みもできません。OAuthは同意画面の「Internal」で運用してください。制限付きスコープは一般公開アプリでは審査・セキュリティ評価が必要になりますが、Workspace組織内のInternalアプリなら不要です。**外部（External）かつ「テスト」状態の同意画面では、リフレッシュトークンが7日で失効します。** プロジェクトが大学のGoogle Workspace組織に属しているか確認してください（属していない場合はInternalを選べません）。
+**採用: 案D `drive`（+ `openid email`）。** 手動作成済みフォルダーの列挙と書き込みを両立する最小の組み合わせが`drive`になるためです。`drive`はメタデータの読み取りも含むため、`drive.metadata.readonly`は不要になりました。広いスコープなので、次の対策でリスクを抑えています。
 
-**書き込み（アップロード）フェーズでの方針:** `drive.metadata.readonly`では書き込めません。その時点で次のいずれかを選び、再同意でスコープを追加します。
-1. 地域フォルダーはアプリ（`drive.file`）が作成する形に移行し、列挙も`drive.file`のみで行う。案Cのスコープは外せる（最小権限として最善）。
-2. 既存の手動フォルダーを使い続け、地域ごとにPickerで選択して`drive.file`の権限を得る（案B。挙動の検証が必要）。
+- トークンはSecret Managerに保存し、Cloud Runのサービスアカウントだけが読めます（フロントエンドには渡りません）。
+- コードが触れるDriveの範囲を限定しています: ①親フォルダー直下のフォルダー一覧、②地域フォルダー直下（と`_thumbnails`）へのファイル作成、③Firestoreに登録済みサムネイルの読み出し。クライアントからはDriveのフォルダーIDもファイルIDも受け取りません。
+- OAuthは同意画面の「内部」（Workspace組織内のみ）で運用してください。制限付きスコープは一般公開アプリでは審査が必要ですが、内部アプリなら不要です。**外部かつ「テスト」状態の同意画面では、リフレッシュトークンが7日で失効します。**
+- 認可時に`drive`が付与されたことを検証し、同意画面で外された場合はトークンを保存しません（`insufficient_scope`）。
 
-今回は読み取りのみなので、書き込みスコープは要求しません。
+### 再認可が必要です
+
+前フェーズで取得済みのリフレッシュトークンは`drive.metadata.readonly`のみのため、そのままでは写真を保存できません（アップロードは`503 drive_scope_insufficient`になります）。**OAuth同意画面のスコープに`drive`を追加し、管理者が再認可してください**（手順は下記「写真アップロードの設定手順」）。`GET /admin/drive/status` の `writeAccess` が `true` になれば完了です。
 
 ## 環境変数
 
 [.env.example](.env.example) を参照。必須: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URI`, `DRIVE_OWNER_EMAIL`。`PORT`はCloud Runが注入します。
+
+## 写真アップロード
+
+`POST /regions/:slug/photos`（`Authorization: Bearer <Firebase IDトークン>`、`multipart/form-data`の`file`（原本JPEG/HEIC）と`thumbnail`（JPEG））。1リクエスト1枚です。
+
+サーバーは次の順で処理し、どこかで失敗した場合はDriveに作ったファイルを削除します。
+
+1. IDトークンを検証（無効なら401）。ユーザー単位の回数・同時実行の制限（429）。
+2. 原本の**先頭バイトで形式を判定**（JPEG/HEICのみ。クライアント申告のContent-Typeは信用しない）、サイズ（原本20MBまで、サムネイル1MBまで）を検証。
+3. **原本のEXIFからGPS・撮影日時・サイズを読み直す**（クライアントの申告値は使わない）。GPSが無い・不正（範囲外、(0,0)）なら`422 no_gps`で保存しない。撮影日時はEXIFのオフセットがあればそれを使い、無ければ日本時間と仮定して`capturedAtTimeZoneKnown: false`にする。
+4. **URLの地域slugからDriveの保存先フォルダーをサーバーが解決**（親フォルダー直下の有効なフォルダーのみ。無ければ`404 region_not_found`）。クライアントが送るフォルダーID等は読み取らない。
+5. 写真IDは`<slug>-<原本のSHA-256の先頭32桁>`。同じ写真の再投稿は`409 duplicate_photo`（Firestoreの`create`で原子的に判定）。
+6. 原本を地域フォルダー直下に、サムネイル（JPEG）を`<地域フォルダー>/_thumbnails`に保存。どちらも**一般公開の権限は付与しない**。
+7. Firestoreの`photos/<id>`に登録（`regionId`、`driveFileId`、`thumbnailDriveFileId`、`latitude`/`longitude`、`capturedAt`、`uploadedAt`（サーバー時刻）、`uploaderUid`（検証済みトークンのuid）、`uploaderName`（トークンの表示名）、`contentHash`、`sizeBytes`など）。メールアドレスは保存しません。
+
+**原本の保存**: 初期実装では原本（HEICはHEICのまま）を保存します。ブラウザで表示できるよう、一覧用のJPEG（長辺640px）をフロントエンドで生成してサムネイルとして保存します。HEICはChrome等では直接表示できないため、フロントエンドでJPEGへ変換します（`heic2any`を使用時のみ読み込み）。サーバー側でのHEIC変換は、標準のsharpバイナリがHEVCを扱えないため見送っています。
+
+**配信**: `GET /photos/:photoId/thumbnail`が、Firestoreに登録済みの写真のサムネイルだけをDriveから読んで返します（Driveファイルは公開しない）。任意のDriveファイルIDは受け付けず、原本の配信もありません。ブラウザとの間は`Cache-Control: public, max-age=31536000, immutable`（写真IDが内容ハッシュ由来のため不変）で、Drive APIの利用を抑えます。GitHub Pagesの`<img>`から読めるよう`Cross-Origin-Resource-Policy: cross-origin`を付けています。
+
+**制限**: ユーザーごとに1時間60回まで・同時2件まで（インスタンス内メモリで集計するため、複数インスタンスでは合算されません。Cloud Runの最大インスタンス数も絞ってください）、原本20MB、リクエスト全体約22MBまで（Cloud Runの32MB制限内）。
 
 ## 開発・テスト
 
@@ -87,7 +112,7 @@ npm run dev
 
 ### GUI操作の順序
 
-1. **OAuth同意画面**（APIとサービス → OAuth同意画面 / Google Auth Platform）: 対象を「内部」にする（不可なら上記7日失効の制約を理解した上で外部）。データアクセスにスコープ `openid`, `.../auth/userinfo.email`, `.../auth/drive.metadata.readonly` を追加。
+1. **OAuth同意画面**（APIとサービス → OAuth同意画面 / Google Auth Platform）: 対象を「内部」にする（不可なら上記7日失効の制約を理解した上で外部）。データアクセスにスコープ `openid`, `.../auth/userinfo.email`, `.../auth/drive` を追加（写真保存に`drive`が必要。以前の`drive.metadata.readonly`は不要になりました）。
 2. **API有効化**: Secret Manager API、Cloud Run Admin API、Cloud Build API、Artifact Registry API（Drive API・Firestore・Identity Toolkitは有効化済み）。
 3. **サービスアカウント作成**（IAMと管理 → サービスアカウント）: 例 `photomap-api-sa`。プロジェクトレベルの役割は `Cloud Datastore ユーザー`（stateの保存）と `Firebase Authentication 閲覧者`（失効チェックのユーザー取得）のみ。
 4. **Secret Manager**:
@@ -128,6 +153,15 @@ console.log((await res.json()).authorizationUrl); // このURLをDrive所有者�
 ```
 
 同意後に「Google Driveの認可が完了しました」と表示されれば完了です。`GET /admin/drive/status` が `authorized: true`、`GET /admin/drive/folders` に `yurihonjo`・`nikaho` が出ることを確認してください。再認可は同じ手順で、新しいバージョンのリフレッシュトークンが保存されます。
+
+## 写真アップロードの設定手順（既に認可済みの場合は再認可が必要）
+
+1. **OAuth同意画面でスコープを追加**（Google Cloud Console → APIとサービス → OAuth同意画面 → データアクセス（Google Auth Platform）→ スコープを追加または削除）: `https://www.googleapis.com/auth/drive` を追加して保存。対象が「内部」であることを再確認（外部・テスト状態ではリフレッシュトークンが7日で失効します）。
+2. **バックエンドを再デプロイ**（写真アップロードAPIを含む版）。環境変数・シークレットの追加は不要です。サービスアカウントの権限はFirestoreへの書き込み（`Cloud Datastore ユーザー`で足ります）と、Secret Managerの既存の権限のみです。
+3. **管理者が再認可**: 「認可の実行手順」と同じ操作で認可URLを取得して開き、**同意画面でGoogle Driveの項目にチェックが入ったまま**許可します（個別に外すと`insufficient_scope`になり保存されません）。新しいリフレッシュトークンが新バージョンとして保存されます。古いバージョンは無効化して構いません。
+4. **確認**: `GET /admin/drive/status` の `writeAccess` が `true`、`grantedScopes` に `.../auth/drive` が含まれること。
+5. **フロントエンド**: GitHub Actionsの`VITE_API_BASE_URL`（既定はCloud RunのURL）が設定されていれば追加の設定は不要です。ログイン済みユーザーに「写真を追加」ボタンが有効になります。
+6. **Firestoreルール**: 変更不要です。`photos`は誰でも読めますがクライアントからは書き込めず、書き込みはCloud Run（Admin SDK）だけが行います。公開されるのは`driveFileId`等のIDで、Driveファイル自体は非公開のため、IDからは閲覧できません。
 
 ## 運用上の注意
 
