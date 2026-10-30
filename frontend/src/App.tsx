@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { APIProvider, Map, useMap } from '@vis.gl/react-google-maps';
 import { ArrowDownUp, Camera, ImagePlus, LogOut, MapPin, Search } from 'lucide-react';
-import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
 import { API_BASE, usePhotos, useRegions, type Photo } from './data';
 import { originalUrl, thumbnailUrl } from './lib/photoUrls';
@@ -173,21 +173,6 @@ function Photomap() {
 
   return (
     <main className="app-shell">
-      <aside className="rail" aria-label="メインナビゲーション">
-        <Link className="brand-mark" to={`/${region.slug}`} aria-label={`Photomap ${region.name}`}>
-          <MapPin size={21} strokeWidth={2.2} />
-        </Link>
-        <div className="rail-rule" />
-        <button className="rail-button is-active" aria-label="地図" title="地図">
-          <MapPin size={19} />
-        </button>
-        <button className="rail-button" aria-label="写真" title="写真">
-          <Camera size={19} />
-        </button>
-        <div className="rail-spacer" />
-        <span className="rail-version">FIELD<br />NOTES</span>
-      </aside>
-
       <section className="workspace">
         <header className="topbar">
           <div className="wordmark"><span>PHOTO</span>MAP</div>
@@ -195,13 +180,6 @@ function Photomap() {
             <UserMenu />
           </div>
         </header>
-
-        <div className="regionbar">
-          <div className="region-intro">
-            <span className="eyebrow">地域マップ</span>
-            <h1>{region.name}</h1>
-          </div>
-        </div>
 
         <div className="content-grid">
           <section className="photo-panel" aria-label={`${region.name}の写真一覧`}>
