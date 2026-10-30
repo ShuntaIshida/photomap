@@ -1,16 +1,11 @@
 import { createHash } from 'node:crypto';
 import { errors } from '../errors.js';
+import type { ImageProcessor } from '../imaging/imageProcessor.js';
 import { log } from '../logger.js';
 import type { PhotoRecord, PhotoRepository } from '../stores/photoRepository.js';
 import type { DriveGateway } from './driveGateway.js';
 import { extractExif, type ExifResult } from './exif.js';
-import {
-  MAX_ORIGINAL_BYTES,
-  MAX_THUMBNAIL_BYTES,
-  MIME_BY_KIND,
-  sanitizeFilename,
-  sniffImageKind,
-} from './photoFormat.js';
+import { MAX_ORIGINAL_BYTES, MIME_BY_KIND, sanitizeFilename, sniffImageKind } from './photoFormat.js';
 import type { RegionService } from './regions.js';
 
 export const THUMBNAIL_FOLDER_NAME = '_thumbnails';
@@ -21,13 +16,13 @@ export interface UploadInput {
   slug: string;
   file: Buffer;
   filename: string;
-  thumbnail: Buffer;
 }
 
 export interface PhotoUploadDeps {
   gateway: DriveGateway;
   regions: RegionService;
   photos: PhotoRepository;
+  images: ImageProcessor;
   extract?: (buf: Buffer) => Promise<ExifResult>;
 }
 
@@ -39,16 +34,16 @@ export class PhotoUploadService {
   }
 
   async upload(input: UploadInput): Promise<{ photoId: string }> {
-    const { gateway, regions, photos } = this.deps;
-    const { file, thumbnail } = input;
+    const { gateway, regions, photos, images } = this.deps;
+    const { file } = input;
 
     if (file.length === 0) throw errors.invalidUpload('Empty file');
-    if (file.length > MAX_ORIGINAL_BYTES || thumbnail.length > MAX_THUMBNAIL_BYTES) throw errors.fileTooLarge();
+    if (file.length > MAX_ORIGINAL_BYTES) throw errors.fileTooLarge();
     const kind = sniffImageKind(file);
     if (!kind) throw errors.unsupportedType();
-    if (sniffImageKind(thumbnail) !== 'jpeg') throw errors.invalidUpload('thumbnail must be a JPEG');
 
-    // 座標・日時はクライアント申告ではなく、原本のEXIFから読み直す。
+    // 座標・日時は原本のEXIFから読む（画像のデコードとは独立。クライアントの申告値は使わない）。
+    // GPSが無い写真はここで弾くので、重い画像処理やDriveへの書き込みは行われない。
     const exif = await this.extract(file);
 
     // 保存先は地域slugからサーバー側でDriveの直下フォルダーとして解決する（クライアントはIDを指定できない）。
@@ -59,6 +54,9 @@ export class PhotoUploadService {
     const hash = createHash('sha256').update(file).digest('hex');
     const photoId = `${region.slug}-${hash.slice(0, 32)}`;
     if (await photos.exists(photoId)) throw errors.duplicatePhoto();
+
+    // 一覧・マーカー用のサムネイル（長辺640pxのJPEG）をサーバーで生成する。デコードに失敗した写真は何も保存しない。
+    const thumb = await images.thumbnail(file, kind);
 
     const originalName = sanitizeFilename(input.filename);
     const uploaded: string[] = [];
@@ -74,6 +72,7 @@ export class PhotoUploadService {
 
     try {
       const thumbFolderId = await gateway.ensureChildFolder(region.driveFolderId, THUMBNAIL_FOLDER_NAME);
+      // 保存するファイルは「原本（無変換）」と「サムネイル」の2つだけ。表示用の高解像度ファイルは作らない。
       const driveFileId = await gateway.uploadFile({
         parentId: region.driveFolderId,
         name: `${hash.slice(0, 8)}_${originalName}`,
@@ -86,7 +85,7 @@ export class PhotoUploadService {
         parentId: thumbFolderId,
         name: `${photoId}.jpg`,
         mimeType: 'image/jpeg',
-        data: thumbnail,
+        data: thumb.data,
         appProperties: { photomapPhotoId: photoId },
       });
       uploaded.push(thumbnailDriveFileId);

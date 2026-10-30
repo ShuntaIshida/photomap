@@ -12,7 +12,7 @@ Photomap is a collaborative, location-based photo mapping web application for fi
 - Google sign-in / sign-out with Firebase Authentication (popup flow)
 - Per-region photo list and map markers read from Cloud Firestore (public read, no login required)
 - Photo map UI ported from `nagareyama-photo`: markers are the photos' own thumbnails (Google Maps `AdvancedMarkerElement` + `@googlemaps/markerclusterer`, same SuperCluster settings), nearby photos cluster with the newest photo as the representative and a count badge, a bottom sheet lists every photo of a cluster or of identical GPS coordinates, and a full-screen viewer supports previous/next buttons, arrow keys and swipes. The map and the left-hand list share one selection. Thumbnails are served by the Cloud Run API; Drive files are never made public
-- Photo upload (login required): select multiple JPEG/HEIC photos, GPS is read from EXIF, photos without GPS are rejected with a reason, originals are stored in the matching Google Drive region folder via the Cloud Run API, and a browser-safe JPEG thumbnail is generated (HEIC is converted in the browser)
+- Photo upload (login required): select multiple JPEG/HEIC photos, GPS is read from EXIF, photos without GPS are rejected with a reason, originals are stored in the matching Google Drive region folder via the Cloud Run API, and and the Cloud Run API generates the 640px JPEG thumbnail (HEIC is decoded server-side). The full-screen viewer shows the original via `GET /photos/<id>/original` (HEIC is converted to JPEG on the fly, not stored) and falls back to the thumbnail on failure
 
 ## Architecture
 

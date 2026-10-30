@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { extractExif, isValidGps, parseExifDate } from '../src/services/exif.js';
 import { MAX_ORIGINAL_BYTES, sanitizeFilename, sniffImageKind } from '../src/services/photoFormat.js';
@@ -42,6 +43,23 @@ describe('extractExif', () => {
 
   it('treats unreadable data as no GPS instead of crashing', async () => {
     await expect(extractExif(Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x01, 0x02]))).rejects.toMatchObject({ code: 'no_gps' });
+  });
+});
+
+describe('extractExif (HEIC originals, independent of image decoding)', () => {
+  const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
+
+  it('reads GPS and capture time from HEIC', async () => {
+    for (const name of ['gps.heic', 'gps-portrait.heic']) {
+      const r = await extractExif(fixture(name));
+      expect(r.latitude).toBeCloseTo(39.3853, 2);
+      expect(r.longitude).toBeCloseTo(140.0528, 2);
+      expect(r.capturedAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it('reports no_gps for a HEIC that has no location', async () => {
+    await expect(extractExif(fixture('no-exif.heic'))).rejects.toMatchObject({ code: 'no_gps' });
   });
 });
 

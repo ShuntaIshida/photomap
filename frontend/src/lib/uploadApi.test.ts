@@ -15,12 +15,11 @@ function capture(response: Response | Error) {
 
 const base = { apiBase: 'https://api.example.test', slug: 'yurihonjo', token: 'firebase-id-token', filename: 'IMG_1.heic' };
 const file = () => new Blob(['original-bytes'], { type: 'image/heic' });
-const thumb = () => new Blob(['thumb-bytes'], { type: 'image/jpeg' });
 
 describe('uploadPhoto', () => {
-  it('sends the Firebase ID token and only the file + thumbnail to the region URL', async () => {
+  it('sends the Firebase ID token and only the file (the server makes the thumbnail) to the region URL', async () => {
     const { calls, fetchFn } = capture(ok({ photoId: 'yurihonjo-abc' }, 201));
-    const r = await uploadPhoto({ ...base, file: file(), thumbnail: thumb(), fetchFn });
+    const r = await uploadPhoto({ ...base, file: file(), fetchFn });
     expect(r.photoId).toBe('yurihonjo-abc');
 
     const call = calls[0]!;
@@ -29,13 +28,13 @@ describe('uploadPhoto', () => {
     expect((call.init.headers as Record<string, string>).Authorization).toBe('Bearer firebase-id-token');
 
     const form = call.init.body as FormData;
-    expect([...form.keys()].sort()).toEqual(['file', 'thumbnail']);
+    expect([...form.keys()].sort()).toEqual(['file']);
     expect((form.get('file') as File).name).toBe('IMG_1.heic');
   });
 
   it('never sends a Drive folder id, coordinates, or uploader id', async () => {
     const { calls, fetchFn } = capture(ok({ photoId: 'p' }, 201));
-    await uploadPhoto({ ...base, file: file(), thumbnail: thumb(), fetchFn });
+    await uploadPhoto({ ...base, file: file(), fetchFn });
     const form = calls[0]!.init.body as FormData;
     for (const forbidden of ['folderId', 'parentId', 'driveFolderId', 'latitude', 'longitude', 'uploaderUid', 'regionId']) {
       expect(form.has(forbidden)).toBe(false);
@@ -44,7 +43,7 @@ describe('uploadPhoto', () => {
 
   it('url-encodes the slug', async () => {
     const { calls, fetchFn } = capture(ok({ photoId: 'p' }, 201));
-    await uploadPhoto({ ...base, slug: 'a/b', file: file(), thumbnail: thumb(), fetchFn });
+    await uploadPhoto({ ...base, slug: 'a/b', file: file(), fetchFn });
     expect(calls[0]!.url).toBe('https://api.example.test/regions/a%2Fb/photos');
   });
 
@@ -56,19 +55,19 @@ describe('uploadPhoto', () => {
     [503, 'drive_scope_insufficient'],
   ])('maps HTTP %i to the server error code %s', async (status, code) => {
     const { fetchFn } = capture(ok({ error: { code } }, status));
-    await expect(uploadPhoto({ ...base, file: file(), thumbnail: thumb(), fetchFn })).rejects.toMatchObject({ code, status });
+    await expect(uploadPhoto({ ...base, file: file(), fetchFn })).rejects.toMatchObject({ code, status });
   });
 
   it('reports network failures and non-JSON errors', async () => {
     const net = capture(new TypeError('failed to fetch'));
-    await expect(uploadPhoto({ ...base, file: file(), thumbnail: thumb(), fetchFn: net.fetchFn })).rejects.toMatchObject({ code: 'network' });
+    await expect(uploadPhoto({ ...base, file: file(), fetchFn: net.fetchFn })).rejects.toMatchObject({ code: 'network' });
     const html = capture(new Response('<html>bad gateway</html>', { status: 502 }));
-    await expect(uploadPhoto({ ...base, file: file(), thumbnail: thumb(), fetchFn: html.fetchFn })).rejects.toMatchObject({ code: 'unknown', status: 502 });
+    await expect(uploadPhoto({ ...base, file: file(), fetchFn: html.fetchFn })).rejects.toMatchObject({ code: 'unknown', status: 502 });
   });
 
   it('rejects a success response without a photo id', async () => {
     const { fetchFn } = capture(ok({}, 201));
-    await expect(uploadPhoto({ ...base, file: file(), thumbnail: thumb(), fetchFn })).rejects.toMatchObject({ code: 'invalid_response' });
+    await expect(uploadPhoto({ ...base, file: file(), fetchFn })).rejects.toMatchObject({ code: 'invalid_response' });
   });
 });
 

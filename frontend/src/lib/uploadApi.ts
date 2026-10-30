@@ -15,7 +15,6 @@ export interface UploadParams {
   token: string;
   file: File | Blob;
   filename: string;
-  thumbnail: Blob;
   signal?: AbortSignal;
   fetchFn?: typeof fetch;
 }
@@ -24,10 +23,9 @@ export interface UploadParams {
  * 写真1枚をCloud Runへ送る。保存先はURLの地域slugのみで、DriveのフォルダーIDは送らない
  * （サーバーがslugから解決する）。座標・日時もサーバーが原本のEXIFから読み直す。
  */
-export async function uploadPhoto({ apiBase, slug, token, file, filename, thumbnail, signal, fetchFn = fetch }: UploadParams): Promise<{ photoId: string }> {
+export async function uploadPhoto({ apiBase, slug, token, file, filename, signal, fetchFn = fetch }: UploadParams): Promise<{ photoId: string }> {
   const form = new FormData();
   form.append('file', file, filename);
-  form.append('thumbnail', thumbnail, 'thumbnail.jpg');
 
   let res: Response;
   try {
@@ -60,6 +58,10 @@ export async function uploadPhoto({ apiBase, slug, token, file, filename, thumbn
 
 const MESSAGES: Record<string, string> = {
   no_gps: 'GPS位置情報がないためアップロードできません（今回は対象外です）',
+  exif_parse_failed: '写真のメタデータ（EXIF）を読み取れませんでした。位置情報が壊れている可能性があります',
+  image_decode_failed: '画像を変換できませんでした。ファイルが壊れているか、未対応のHEICの可能性があります',
+  image_too_large: '画像の解像度が大きすぎて処理できません',
+  conversion_busy: 'サーバーが混み合っています。しばらくしてからお試しください',
   unsupported_media_type: 'JPEGまたはHEIC形式の写真のみアップロードできます',
   file_too_large: 'ファイルサイズが大きすぎます（上限20MB）',
   duplicate_photo: 'この写真はすでにこの地域へアップロードされています',
@@ -77,5 +79,5 @@ const MESSAGES: Record<string, string> = {
 
 export function describeUploadError(e: unknown): string {
   if (e instanceof UploadError) return MESSAGES[e.code] ?? 'アップロードに失敗しました';
-  return '写真の処理に失敗しました（ブラウザで表示できない形式の可能性があります）';
+  return '写真の処理に失敗しました';
 }

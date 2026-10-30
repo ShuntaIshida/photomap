@@ -125,6 +125,56 @@ describe('PhotoViewer', () => {
   });
 });
 
+describe('PhotoViewer original image', () => {
+  const photos = [photo('a'), photo('b')];
+  const setup = () =>
+    mount(
+      createElement(PhotoViewer, {
+        photos,
+        index: 0,
+        imageUrl: (p: Photo) => `https://api.test/${p.id}/thumbnail`,
+        originalUrl: (p: Photo) => `https://api.test/${p.id}/original`,
+        formatDate: (): string => '',
+        onIndexChange: vi.fn(),
+        onClose: vi.fn(),
+      }),
+    );
+  const srcs = (host: HTMLElement) => [...host.querySelectorAll('img')].map((i) => i.getAttribute('src'));
+
+  it('requests the original, shows a loading indicator and the thumbnail meanwhile', () => {
+    const { host, unmount } = setup();
+    expect(srcs(host)).toEqual(['https://api.test/a/original', 'https://api.test/a/thumbnail']);
+    expect(host.querySelector('.pmap-viewer-loading')).not.toBeNull();
+    unmount();
+  });
+
+  it('shows only the original once it has loaded', () => {
+    const { host, unmount } = setup();
+    act(() => void host.querySelector('img')!.dispatchEvent(new Event('load')));
+    expect(host.querySelector('.pmap-viewer-loading')).toBeNull();
+    expect(srcs(host)).toEqual(['https://api.test/a/original']);
+    expect((host.querySelector('img') as HTMLImageElement).style.display).not.toBe('none');
+    unmount();
+  });
+
+  it('falls back to the thumbnail when the original fails', () => {
+    const { host, unmount } = setup();
+    act(() => void host.querySelector('img')!.dispatchEvent(new Event('error')));
+    expect(srcs(host)).toEqual(['https://api.test/a/thumbnail']);
+    expect(host.querySelector('.pmap-viewer-loading')).toBeNull();
+    expect(host.querySelector('.pmap-viewer-missing')).toBeNull();
+    unmount();
+  });
+
+  it('shows a message only when both original and thumbnail fail', () => {
+    const { host, unmount } = setup();
+    act(() => void host.querySelectorAll('img')[0]!.dispatchEvent(new Event('error')));
+    act(() => void host.querySelector('img')!.dispatchEvent(new Event('error')));
+    expect(host.querySelector('.pmap-viewer-missing')).not.toBeNull();
+    unmount();
+  });
+});
+
 describe('ClusterSheet', () => {
   it('lists every photo of the cluster and opens the viewer at the picked one', () => {
     const list = Array.from({ length: 12 }, (_, i) => photo(`s${i}`));

@@ -1,5 +1,7 @@
 import { Readable } from 'node:stream';
 import { createApp } from '../src/app.js';
+import { SharpImageProcessor, type ImageProcessor } from '../src/imaging/imageProcessor.js';
+import { OriginalService } from '../src/services/originals.js';
 import type { Config } from '../src/config.js';
 import { errors } from '../src/errors.js';
 import type { AuthService, AuthUser } from '../src/services/authService.js';
@@ -138,7 +140,12 @@ export class FakeGateway extends StubGateway {
   }
 }
 
-export function build(options: { limiter?: UploadLimiter; extract?: PhotoUploadServiceExtract } = {}) {
+// 実際の画像処理（sharp + HEIC用ワーカー）をテストでも使う。
+export const sharedImages = new SharpImageProcessor();
+
+export function build(
+  options: { limiter?: UploadLimiter; extract?: PhotoUploadServiceExtract; images?: ImageProcessor } = {},
+) {
   const tokens = new MemoryRefreshTokenStore();
   const states = new MemoryOAuthStateStore();
   const auth = new FakeAuth();
@@ -146,10 +153,12 @@ export function build(options: { limiter?: UploadLimiter; extract?: PhotoUploadS
   const gateway = new FakeGateway(tokens);
   const regions = new RegionService(gateway);
   const photos = new MemoryPhotoRepository();
-  const uploads = new PhotoUploadService({ gateway, regions, photos, extract: options.extract });
+  const images = options.images ?? sharedImages;
+  const uploads = new PhotoUploadService({ gateway, regions, photos, images, extract: options.extract });
+  const originals = new OriginalService({ photos, gateway, images });
   const uploadLimiter = options.limiter ?? new UploadLimiter();
   const authorization = new DriveAuthorization({ config, google, states, tokens, isAdmin: (uid) => auth.isAdmin(uid) });
-  const app = createApp({ config, auth, authorization, gateway, regions, uploads, photos, uploadLimiter });
+  const app = createApp({ config, auth, authorization, gateway, regions, uploads, photos, originals, uploadLimiter });
   return { app, tokens, states, auth, google, gateway, regions, photos };
 }
 

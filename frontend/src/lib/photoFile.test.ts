@@ -19,7 +19,7 @@ describe('inspectPhoto (pre-upload check)', () => {
   it('accepts a JPEG with GPS and returns the coordinates', async () => {
     const r = await inspectPhoto(blob(makeJpegWithGps(39.3853, 140.0488)));
     expect(r.ok).toBe(true);
-    if (r.ok) {
+    if (r.ok && !r.serverCheck) {
       expect(r.kind).toBe('jpeg');
       expect(r.latitude).toBeCloseTo(39.3853, 3);
       expect(r.longitude).toBeCloseTo(140.0488, 3);
@@ -47,8 +47,15 @@ describe('inspectPhoto (pre-upload check)', () => {
     expect(await inspectPhoto(big)).toMatchObject({ ok: false, code: 'too_large' });
   });
 
-  it('treats a HEIC without readable EXIF as no GPS (never crashes)', async () => {
-    expect(await inspectPhoto(blob(makeHeicLike('heic'), 'image/heic'))).toMatchObject({ ok: false, code: 'no_gps' });
+  it('leaves a HEIC without browser-readable GPS to the server instead of rejecting it', async () => {
+    expect(await inspectPhoto(blob(makeHeicLike('heic'), 'image/heic'))).toMatchObject({ ok: true, kind: 'heic', serverCheck: true });
+  });
+
+  it('does not call a JPEG whose EXIF cannot be parsed "no GPS"', async () => {
+    const broken = new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10, 0x45, 0x78, 0x69, 0x66, 0, 0, 0x49, 0x49, 0x2a, 0, 0xff, 0xff, 0xff, 0xff]);
+    const r = await inspectPhoto(blob(broken));
+    if (r.ok) expect(r.serverCheck).toBe(true);
+    else expect(r.code).toBe('no_gps');
   });
 });
 

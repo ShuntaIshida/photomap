@@ -11,8 +11,9 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。役割は、Fi
 | 公開 | `GET /health` | なし | ヘルスチェック |
 | 公開（stateで保護） | `GET /oauth/google/callback` | 管理者が開始時に発行した1回限りの`state` | Googleからのリダイレクト受け口 |
 | 公開 | `GET /regions` | なし | Drive直下フォルダー由来の地域slug一覧（`{regions:[{slug}]}`）。フォルダーIDは返さない |
+| 公開 | `GET /photos/:photoId/original` | なし | 全画面ビューア用。JPEGは原本を無加工で、HEICは表示用JPEG（長辺2560px）へ都度変換して返す（変換結果はDriveに保存しない） |
 | 公開 | `GET /photos/:photoId/thumbnail` | なし | Firestoreに登録済みの写真のサムネイルJPEGをDriveから代理配信。Driveファイル自体は公開しない |
-| ログイン済み | `POST /regions/:slug/photos` | Firebase IDトークン | 写真1枚のアップロード（multipart: `file`=原本, `thumbnail`=JPEG）。下記「写真アップロード」参照 |
+| ログイン済み | `POST /regions/:slug/photos` | Firebase IDトークン | 写真1枚のアップロード（multipart: `file`=原本のみ。サムネイルはサーバーが生成。旧クライアントの`thumbnail`は無視）。下記「写真アップロード」参照 |
 | 管理者 | `POST /admin/drive/oauth/start` | IDトークン＋管理者 | 認可URLを返す（`{authorizationUrl}`） |
 | 管理者 | `GET /admin/drive/status` | 同上 | 認可済みか、付与スコープ、`writeAccess`（写真保存に必要な書き込み権限があるか）。トークンは返さない |
 | 管理者 | `GET /admin/drive/folders` | 同上 | 地域一覧（フォルダーID付き）と除外されたフォルダー |
@@ -72,21 +73,25 @@ Node.js 22 + TypeScript + Express 5 のバックエンドです。役割は、Fi
 
 ## 写真アップロード
 
-`POST /regions/:slug/photos`（`Authorization: Bearer <Firebase IDトークン>`、`multipart/form-data`の`file`（原本JPEG/HEIC）と`thumbnail`（JPEG））。1リクエスト1枚です。
+`POST /regions/:slug/photos`（`Authorization: Bearer <Firebase IDトークン>`、`multipart/form-data`の`file`（原本JPEG/HEIC）のみ）。1リクエスト1枚です。サムネイル（長辺640pxのJPEG）はサーバーが原本から生成します。
 
 サーバーは次の順で処理し、どこかで失敗した場合はDriveに作ったファイルを削除します。
 
 1. IDトークンを検証（無効なら401）。ユーザー単位の回数・同時実行の制限（429）。
-2. 原本の**先頭バイトで形式を判定**（JPEG/HEICのみ。クライアント申告のContent-Typeは信用しない）、サイズ（原本20MBまで、サムネイル1MBまで）を検証。
+2. 原本の**先頭バイトで形式を判定**（JPEG/HEICのみ。クライアント申告のContent-Typeは信用しない）、サイズ（原本20MBまで）を検証。
 3. **原本のEXIFからGPS・撮影日時・サイズを読み直す**（クライアントの申告値は使わない）。GPSが無い・不正（範囲外、(0,0)）なら`422 no_gps`で保存しない。撮影日時はEXIFのオフセットがあればそれを使い、無ければ日本時間と仮定して`capturedAtTimeZoneKnown: false`にする。
 4. **URLの地域slugからDriveの保存先フォルダーをサーバーが解決**（親フォルダー直下の有効なフォルダーのみ。無ければ`404 region_not_found`）。クライアントが送るフォルダーID等は読み取らない。
 5. 写真IDは`<slug>-<原本のSHA-256の先頭32桁>`。同じ写真の再投稿は`409 duplicate_photo`（Firestoreの`create`で原子的に判定）。
 6. 原本を地域フォルダー直下に、サムネイル（JPEG）を`<地域フォルダー>/_thumbnails`に保存。どちらも**一般公開の権限は付与しない**。
 7. Firestoreの`photos/<id>`に登録（`regionId`、`driveFileId`、`thumbnailDriveFileId`、`latitude`/`longitude`、`capturedAt`、`uploadedAt`（サーバー時刻）、`uploaderUid`（検証済みトークンのuid）、`uploaderName`（トークンの表示名）、`contentHash`、`sizeBytes`など）。メールアドレスは保存しません。
 
-**原本の保存**: 初期実装では原本（HEICはHEICのまま）を保存します。ブラウザで表示できるよう、一覧用のJPEG（長辺640px）をフロントエンドで生成してサムネイルとして保存します。HEICはChrome等では直接表示できないため、フロントエンドでJPEGへ変換します（`heic2any`を使用時のみ読み込み）。サーバー側でのHEIC変換は、標準のsharpバイナリがHEVCを扱えないため見送っています。
+**原本の保存**: Driveに保存するのは1枚につき最大2ファイルだけです。①原本（JPEG/HEICとも無変換。地域フォルダー直下）、②サムネイル（長辺640pxのJPEG。`_thumbnails/<photoId>.jpg`）。表示用の高解像度ファイルはDriveに作りません。
 
-**配信**: `GET /photos/:photoId/thumbnail`が、Firestoreに登録済みの写真のサムネイルだけをDriveから読んで返します（Driveファイルは公開しない）。任意のDriveファイルIDは受け付けず、原本の配信もありません。ブラウザとの間は`Cache-Control: public, max-age=31536000, immutable`（写真IDが内容ハッシュ由来のため不変）で、Drive APIの利用を抑えます。GitHub Pagesの`<img>`から読めるよう`Cross-Origin-Resource-Policy: cross-origin`を付けています。
+**HEICの処理**: GPS・撮影日時は原本のEXIFから画像デコードとは独立に読みます（exifr。HEICで読めない場合はISOBMFFコンテナからExif項目を直接取り出して再試行）。EXIFの解析失敗は`exif_parse_failed`、位置情報が無い場合は`no_gps`として区別します。画像変換はCloud Run上でlibheif-js（WASM）をワーカースレッドで実行し、sharpでリサイズします（OSパッケージ追加は不要）。同時実行1・待ち行列6（超過は503 `conversion_busy`）・30秒タイムアウト・5,000万画素上限で、ジョブごとにワーカーを終了してメモリを返します。HEICは1件あたり約150〜300MBのメモリを使うため、Cloud Runのメモリは1GiB以上、max-instancesは小さめを推奨します。
+
+**原本の表示**: `GET /photos/:photoId/original`はFirestoreに登録済みの写真だけを写真ID経由で返します（任意のDriveファイルIDは受け付けません）。ログイン不要です。HEICの変換結果は小さなメモリLRU（24MB）と同時リクエストの合流で再変換を抑え、`Cache-Control: public, max-age=31536000, immutable`を付けます。失敗時はJSONエラー（`image_decode_failed`等）を返し、フロントエンドはサムネイルへフォールバックします。既存のJPEG写真は`driveFileId`/`mimeType`だけで原本表示でき、データ移行は不要です。
+
+**配信**: `GET /photos/:photoId/thumbnail`が、Firestoreに登録済みの写真のサムネイルだけをDriveから読んで返します（Driveファイルは公開しない）。任意のDriveファイルIDは受け付けません。ブラウザとの間は`Cache-Control: public, max-age=31536000, immutable`（写真IDが内容ハッシュ由来のため不変）で、Drive APIの利用を抑えます。GitHub Pagesの`<img>`から読めるよう`Cross-Origin-Resource-Policy: cross-origin`を付けています。
 
 **制限**: ユーザーごとに1時間60回まで・同時2件まで（インスタンス内メモリで集計するため、複数インスタンスでは合算されません。Cloud Runの最大インスタンス数も絞ってください）、原本20MB、リクエスト全体約22MBまで（Cloud Runの32MB制限内）。
 
@@ -135,9 +140,12 @@ gcloud run deploy photomap-api \
   --source backend --region asia-northeast1 --project photomap-app1 \
   --service-account photomap-api-sa@photomap-app1.iam.gserviceaccount.com \
   --allow-unauthenticated --max-instances 3 \
+  --memory 1Gi --cpu 1 \
   --set-env-vars FIREBASE_PROJECT_ID=photomap-app1,OAUTH_REDIRECT_URI=<上記のURI>,DRIVE_OWNER_EMAIL=<大学アカウント>,GOOGLE_OAUTH_CLIENT_ID=<クライアントID>,ADMIN_UIDS=<管理者UID> \
   --set-secrets GOOGLE_OAUTH_CLIENT_SECRET=photomap-oauth-client-secret:latest
 ```
+
+既存サービスの再デプロイでは、`--set-env-vars`が既存の環境変数を**置き換える**ため、環境変数を変えない場合は`--set-env-vars`/`--set-secrets`を付けずに`--source backend --memory 1Gi`などだけを指定してください（未指定の設定は引き継がれます）。
 
 `--allow-unauthenticated`はHTTPアクセスの公開であり、保護対象APIはアプリ側でFirebase IDトークンを必須にしています。クライアントIDは秘密ではありませんが、シークレットは必ず`--set-secrets`で渡してください。
 

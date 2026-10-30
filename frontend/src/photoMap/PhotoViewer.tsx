@@ -5,8 +5,10 @@ import { clampIndex, swipeDirection } from '../lib/photoGroups';
 export interface PhotoViewerProps {
   photos: readonly Photo[];
   index: number;
-  /** 表示する画像のURL。画像が無い写真はnull。 */
+  /** サムネイルのURL。原本の読み込み中の仮表示と、原本の取得に失敗したときの代替に使う。 */
   imageUrl: (photo: Photo) => string | null;
+  /** 原本（HEICは表示用JPEG）のURL。 */
+  originalUrl?: (photo: Photo) => string | null;
   formatDate: (photo: Photo) => string;
   onIndexChange: (index: number) => void;
   onClose: () => void;
@@ -16,11 +18,13 @@ export interface PhotoViewerProps {
  * 全画面の写真ビューア（nagareyama-photoのopenPhotoModal/updateModalContentの移植）。
  * 前へ・次へボタン、キーボードの左右、スマートフォンの左右スワイプ（40px以上）で切り替える。
  */
-export default function PhotoViewer({ photos, index, imageUrl, formatDate, onIndexChange, onClose }: PhotoViewerProps) {
+export default function PhotoViewer({ photos, index, imageUrl, originalUrl, formatDate, onIndexChange, onClose }: PhotoViewerProps) {
   const current = photos[clampIndex(index, photos.length)];
   const touchStartX = useRef(0);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const [failedId, setFailedId] = useState<string | null>(null);
+  const [originalLoadedId, setOriginalLoadedId] = useState<string | null>(null);
+  const [originalFailedId, setOriginalFailedId] = useState<string | null>(null);
+  const [thumbFailedId, setThumbFailedId] = useState<string | null>(null);
 
   const go = (delta: number) => {
     const next = index + delta;
@@ -42,7 +46,21 @@ export default function PhotoViewer({ photos, index, imageUrl, formatDate, onInd
   });
 
   if (!current) return null;
-  const src = imageUrl(current);
+  const thumbSrc = imageUrl(current);
+  const originalSrc = originalUrl?.(current) ?? null;
+  const showOriginal = !!originalSrc && originalFailedId !== current.id;
+  const originalReady = originalLoadedId === current.id;
+  const showThumb = !!thumbSrc && thumbFailedId !== current.id && (!showOriginal || !originalReady);
+  const swipe = {
+    onTouchStart: (e: React.TouchEvent) => {
+      touchStartX.current = e.changedTouches[0]?.clientX ?? 0;
+    },
+    onTouchEnd: (e: React.TouchEvent) => {
+      const dir = swipeDirection((e.changedTouches[0]?.clientX ?? 0) - touchStartX.current);
+      if (dir === 'prev') go(-1);
+      else if (dir === 'next') go(1);
+    },
+  };
 
   return (
     <div className="pmap-viewer" aria-hidden="false">
@@ -60,25 +78,30 @@ export default function PhotoViewer({ photos, index, imageUrl, formatDate, onInd
           <p className="pmap-viewer-index">{index + 1} / {photos.length}</p>
         </div>
         <div className="pmap-viewer-stage">
-          {src && failedId !== current.id ? (
+          {showOriginal && (
             <img
-              key={current.id}
+              key={`original-${current.id}`}
               className="pmap-viewer-image"
-              src={src}
+              style={originalReady ? undefined : { display: 'none' }}
+              src={originalSrc}
               alt={current.originalFilename}
-              onError={() => setFailedId(current.id)}
-              onTouchStart={(e) => {
-                touchStartX.current = e.changedTouches[0]?.clientX ?? 0;
-              }}
-              onTouchEnd={(e) => {
-                const dir = swipeDirection((e.changedTouches[0]?.clientX ?? 0) - touchStartX.current);
-                if (dir === 'prev') go(-1);
-                else if (dir === 'next') go(1);
-              }}
+              onLoad={() => setOriginalLoadedId(current.id)}
+              onError={() => setOriginalFailedId(current.id)}
+              {...swipe}
             />
-          ) : (
-            <p className="pmap-viewer-missing">この写真の画像を表示できません</p>
           )}
+          {showThumb && (
+            <img
+              key={`thumb-${current.id}`}
+              className="pmap-viewer-image"
+              src={thumbSrc}
+              alt={current.originalFilename}
+              onError={() => setThumbFailedId(current.id)}
+              {...swipe}
+            />
+          )}
+          {showOriginal && !originalReady && <p className="pmap-viewer-loading" role="status">原本を読み込み中…</p>}
+          {!showOriginal && !showThumb && <p className="pmap-viewer-missing">この写真の画像を表示できません</p>}
         </div>
       </div>
     </div>

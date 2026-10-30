@@ -1,5 +1,7 @@
 import exifr from 'exifr';
 import { errors } from '../errors.js';
+import { extractHeicExif } from './heicExif.js';
+import { sniffImageKind } from './photoFormat.js';
 
 export interface ExifResult {
   latitude: number;
@@ -42,28 +44,61 @@ export function parseExifDate(
   return { date, timeZoneKnown: known };
 }
 
-/** 原本のEXIFを読む。GPSが無い・不正な場合は no_gps で失敗する。 */
+const PICK = ['DateTimeOriginal', 'OffsetTimeOriginal', 'CreateDate', 'ExifImageWidth', 'ExifImageHeight', 'ImageWidth', 'ImageHeight', 'Make', 'Model'];
+
+type Tags = Record<string, unknown>;
+interface Parsed {
+  gps: { latitude?: number; longitude?: number } | undefined;
+  tags: Tags | undefined;
+}
+
+/** exifrでEXIFを読む。解析自体が失敗したら例外（「GPSなし」とは区別する）。 */
+async function parseWithExifr(source: Buffer | Uint8Array): Promise<Parsed> {
+  const gps = await exifr.gps(source);
+  // 日時は文字列のまま取得し、タイムゾーンを自前で解釈する（環境のTZに依存させない）。
+  const tags = (await exifr.parse(source, { pick: PICK, reviveValues: false })) as Tags | undefined;
+  return { gps, tags };
+}
+
+/**
+ * 原本のEXIFを読む。画像のデコードとは独立した処理。
+ * - 位置情報がある: 結果を返す
+ * - EXIFは読めたが位置情報が無い・不正（範囲外、(0,0)）: no_gps
+ * - EXIFの解析自体が失敗した: exif_parse_failed（GPSが無いこととは区別する）
+ */
 export async function extractExif(buf: Buffer): Promise<ExifResult> {
-  let gps: { latitude?: number; longitude?: number } | undefined;
-  let tags: Record<string, unknown> | undefined;
+  let parsed: Parsed | undefined;
+  let failed = false;
   try {
-    gps = await exifr.gps(buf);
-    // 日時は文字列のまま取得し、タイムゾーンを自前で解釈する（環境のTZに依存させない）。
-    tags = (await exifr.parse(buf, {
-      pick: ['DateTimeOriginal', 'OffsetTimeOriginal', 'CreateDate', 'ExifImageWidth', 'ExifImageHeight', 'ImageWidth', 'ImageHeight'],
-      reviveValues: false,
-    })) as Record<string, unknown> | undefined;
+    parsed = await parseWithExifr(buf);
   } catch {
-    // 壊れたEXIFはGPSなしとして扱う。
+    failed = true;
   }
+
+  // HEICでexifrが何も見つけられないときは、コンテナからExif項目を直接取り出して再試行する。
+  const noInfo = failed || (!parsed?.gps && !parsed?.tags);
+  if (noInfo && sniffImageKind(buf) === 'heic') {
+    const tiff = extractHeicExif(buf);
+    if (tiff) {
+      try {
+        parsed = await parseWithExifr(tiff);
+        failed = false;
+      } catch {
+        failed = true;
+      }
+    }
+  }
+
+  if (failed && !parsed) throw errors.exifParseFailed();
+  const { gps, tags } = parsed ?? { gps: undefined, tags: undefined };
   if (!gps || !isValidGps(gps.latitude, gps.longitude)) throw errors.noGps();
 
-  const parsed = parseExifDate(tags?.DateTimeOriginal ?? tags?.CreateDate, tags?.OffsetTimeOriginal);
+  const captured = parseExifDate(tags?.DateTimeOriginal ?? tags?.CreateDate, tags?.OffsetTimeOriginal);
   return {
     latitude: gps.latitude as number,
     longitude: gps.longitude as number,
-    capturedAt: parsed?.date ?? null,
-    capturedAtTimeZoneKnown: parsed?.timeZoneKnown ?? false,
+    capturedAt: captured?.date ?? null,
+    capturedAtTimeZoneKnown: captured?.timeZoneKnown ?? false,
     width: num(tags?.ExifImageWidth) ?? num(tags?.ImageWidth),
     height: num(tags?.ExifImageHeight) ?? num(tags?.ImageHeight),
   };

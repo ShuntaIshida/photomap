@@ -4,7 +4,7 @@ import { ArrowDownUp, Camera, ImagePlus, LogOut, MapPin, Search } from 'lucide-r
 import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
 import { API_BASE, usePhotos, useRegions, type Photo } from './data';
-import { thumbnailUrl } from './lib/photoUrls';
+import { originalUrl, thumbnailUrl } from './lib/photoUrls';
 import type { PhotoPoint } from './lib/photoGroups';
 import { uploadAvailability } from './lib/uploadAvailability';
 import ClusterSheet from './photoMap/ClusterSheet';
@@ -324,6 +324,7 @@ function Photomap() {
           photos={viewer.photos}
           index={viewer.index}
           imageUrl={thumbnailUrl}
+          originalUrl={originalUrl}
           formatDate={formatCaptured}
           onIndexChange={(index) => openViewer(viewer.photos, index)}
           onClose={() => setViewer(null)}

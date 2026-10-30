@@ -20,8 +20,10 @@ export function sniffImageKind(buf: Uint8Array): ImageKind | null {
 
 export type RejectCode = 'empty' | 'too_large' | 'unsupported' | 'no_gps';
 
+// serverCheck: ブラウザではGPSを確認できなかったため、サーバーの判定に任せる（HEICや解析失敗）。
 export type Inspection =
-  | { ok: true; kind: ImageKind; latitude: number; longitude: number }
+  | { ok: true; kind: ImageKind; latitude: number; longitude: number; serverCheck: false }
+  | { ok: true; kind: ImageKind; serverCheck: true }
   | { ok: false; code: RejectCode; reason: string };
 
 export const REJECT_MESSAGES: Record<RejectCode, string> = {
@@ -52,8 +54,13 @@ export async function inspectPhoto(file: Blob): Promise<Inspection> {
   try {
     gps = await exifr.gps(bytes);
   } catch {
-    // 壊れたEXIFはGPSなしとして扱う。
+    // EXIFを読めないことはGPSが無いこととは別。サーバー（原本のEXIFを独立に解析）が判定する。
+    return { ok: true, kind, serverCheck: true };
   }
-  if (!gps || !isValidGps(gps.latitude, gps.longitude)) return reject('no_gps');
-  return { ok: true, kind, latitude: gps.latitude as number, longitude: gps.longitude as number };
+  if (gps && isValidGps(gps.latitude, gps.longitude)) {
+    return { ok: true, kind, latitude: gps.latitude as number, longitude: gps.longitude as number, serverCheck: false };
+  }
+  // HEICはブラウザ側の解析が不完全なことがあるため、拒否せずサーバーに任せる。
+  if (kind === 'heic') return { ok: true, kind, serverCheck: true };
+  return reject('no_gps');
 }

@@ -3,7 +3,6 @@ import { CheckCircle2, ImagePlus, Loader2, X, XCircle } from 'lucide-react';
 import { useAuth } from './auth';
 import { API_BASE } from './data';
 import { inspectPhoto, MAX_FILES_PER_BATCH, type ImageKind } from './lib/photoFile';
-import { createThumbnail } from './lib/thumbnail';
 import { describeUploadError, UploadError, uploadPhoto } from './lib/uploadApi';
 
 type Status = 'checking' | 'ready' | 'rejected' | 'uploading' | 'done' | 'failed';
@@ -65,7 +64,7 @@ export default function UploadDialog({ regionSlug, regionName, onClose, onUpload
     // メモリ使用を抑えるため1枚ずつ検査する。
     for (const it of added) {
       const result = await inspectPhoto(it.file);
-      if (result.ok) patch(it.key, { status: 'ready', kind: result.kind });
+      if (result.ok) patch(it.key, { status: 'ready', kind: result.kind, message: result.serverCheck ? 'アップロード可能（位置情報はサーバーで確認します）' : undefined });
       else patch(it.key, { status: 'rejected', message: result.reason });
     }
   };
@@ -83,8 +82,7 @@ export default function UploadDialog({ regionSlug, regionName, onClose, onUpload
       if (ctrl.signal.aborted) break;
       patch(it.key, { status: 'uploading', message: undefined });
       try {
-        // 一覧用JPEG（HEICもここで変換）。原本は無加工のまま送る。
-        const thumbnail = await createThumbnail(it.file, it.kind!);
+        // 原本は無加工のまま送る。サムネイルはサーバーが生成する。
         // 長いバッチでも期限切れにならないよう、毎回最新のIDトークンを取得する。
         const token = await user.getIdToken();
         const { photoId } = await uploadPhoto({
@@ -93,7 +91,6 @@ export default function UploadDialog({ regionSlug, regionName, onClose, onUpload
           token,
           file: it.file,
           filename: it.file.name,
-          thumbnail,
           signal: ctrl.signal,
         });
         patch(it.key, { status: 'done' });

@@ -8,3 +8,8 @@ import type { Photo } from '../data';
 export function thumbnailUrl(photo: Pick<Photo, 'id' | 'thumbnailDriveFileId'>): string | null {
   return photo.thumbnailDriveFileId && API_BASE ? `${API_BASE}/photos/${encodeURIComponent(photo.id)}/thumbnail` : null;
 }
+
+/** 全画面ビューア用の原本。JPEGは原本、HEICはCloud Runが変換した表示用JPEG。 */
+export function originalUrl(photo: Pick<Photo, 'id'>): string | null {
+  return API_BASE ? `${API_BASE}/photos/${encodeURIComponent(photo.id)}/original` : null;
+}

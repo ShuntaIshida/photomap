@@ -1,3 +1,5 @@
+import sharp from 'sharp';
+
 // EXIF付きの最小JPEGをテスト内で組み立てる（外部の画像ファイルやライブラリに依存しない）。
 
 interface Entry {
@@ -117,4 +119,17 @@ function u32BE(n: number) {
   const b = Buffer.alloc(4);
   b.writeUInt32BE(n);
   return b;
+}
+
+// 実際にデコードできる小さなJPEG本体（画素は単色）。サーバーのサムネイル生成を通すテストで使う。
+const BASE_JPEG = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#668866' } })
+  .jpeg()
+  .toBuffer();
+
+/** makeJpegWithExif と同じEXIFを持ちつつ、sharpでデコードできるJPEG。 */
+export function makeDecodableJpeg(options: JpegOptions = {}): Buffer {
+  const withExif = makeJpegWithExif(options);
+  // EXIFだけのJPEG(SOI + APP1 + EOI)からAPP1を取り出し、実画像のSOI直後へ挿入する。
+  const app1 = withExif.subarray(2, withExif.length - 2);
+  return Buffer.concat([BASE_JPEG.subarray(0, 2), app1, BASE_JPEG.subarray(2)]);
 }
