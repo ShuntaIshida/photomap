@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@googlemaps/markerclusterer": "^2.6.2",
     "@vis.gl/react-google-maps": "^1.5.5",
     "exifr": "^7.1.3",
     "firebase": "^13.1.0",
@@ -23,6 +24,7 @@
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",
+    "happy-dom": "^21.0.4",
     "typescript": "~5.7.2",
     "vite": "^6.0.7",
     "vitest": "^3.2.7"

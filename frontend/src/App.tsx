@@ -1,9 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
-import { APIProvider, Map, Marker, useMap } from '@vis.gl/react-google-maps';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { APIProvider, Map, useMap } from '@vis.gl/react-google-maps';
 import { ArrowDownUp, Camera, ImagePlus, LogOut, MapPin, Search } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useAuth } from './auth';
 import { API_BASE, usePhotos, useRegions, type Photo } from './data';
+import { thumbnailUrl } from './lib/photoUrls';
+import type { PhotoPoint } from './lib/photoGroups';
+import { uploadAvailability } from './lib/uploadAvailability';
+import ClusterSheet from './photoMap/ClusterSheet';
+import { PhotoLayer, type FocusRequest } from './photoMap/PhotoLayer';
+import PhotoViewer from './photoMap/PhotoViewer';
+import './photoMap/photoMap.css';
 import type { LatLng } from './regionList';
 import UploadDialog from './UploadDialog';
 
@@ -73,41 +80,6 @@ function RegionViewport({ center, zoom }: { center: LatLng; zoom: number }) {
   return null;
 }
 
-function PhotoMarkers({ photos, selectedId, onSelect }: { photos: Photo[]; selectedId: string | null; onSelect: (id: string) => void }) {
-  const map = useMap();
-  const selected = photos.find((p) => p.id === selectedId);
-
-  useEffect(() => {
-    if (map && selected?.latitude != null && selected.longitude != null) {
-      map.panTo({ lat: selected.latitude, lng: selected.longitude });
-    }
-  }, [map, selected]);
-
-  return (
-    <>
-      {photos.map((p) =>
-        p.latitude != null && p.longitude != null ? (
-          <Marker
-            key={p.id}
-            position={{ lat: p.latitude, lng: p.longitude }}
-            title={p.originalFilename}
-            zIndex={p.id === selectedId ? 10 : 1}
-            onClick={() => onSelect(p.id)}
-            icon={{
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: p.id === selectedId ? 11 : 7,
-              fillColor: p.id === selectedId ? '#e6a23c' : '#27725d',
-              fillOpacity: 1,
-              strokeColor: '#ffffff',
-              strokeWeight: 2,
-            }}
-          />
-        ) : null,
-      )}
-    </>
-  );
-}
-
 function RegionMissing({ loading = false }: { loading?: boolean }) {
   return (
     <main className="region-missing">
@@ -125,11 +97,15 @@ function Photomap() {
   const region = regions.find((item) => item.slug === slug);
   const { photos, loading: photosLoading, error: photosError } = usePhotos(region?.id ?? null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focus, setFocus] = useState<FocusRequest | null>(null);
+  const [viewer, setViewer] = useState<{ photos: PhotoPoint[]; index: number } | null>(null);
+  const [sheet, setSheet] = useState<PhotoPoint[] | null>(null);
   const [keyword, setKeyword] = useState('');
   const [uploadOpen, setUploadOpen] = useState(false);
   const { user, loading: authLoading, configured: authConfigured } = useAuth();
   // 閲覧はログイン不要。アップロードだけログイン必須（サーバーでもFirebaseトークンを検証する）。
-  const canUpload = Boolean(user) && Boolean(API_BASE);
+  const upload = uploadAvailability({ user, authLoading, authConfigured, apiBase: API_BASE });
+  const canUpload = upload.enabled;
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
   const visiblePhotos = useMemo(() => {
@@ -138,6 +114,38 @@ function Photomap() {
       ? photos.filter((p) => `${p.originalFilename} ${p.uploaderName}`.toLowerCase().includes(q))
       : photos;
   }, [photos, keyword]);
+
+  // 地図と一覧は同じselectedIdを共有する（常に同期）。一覧・アップロードからの選択は地図をその写真へ移動する。
+  const focusPhoto = useCallback((id: string) => {
+    setSelectedId(id);
+    setFocus((f) => ({ id, nonce: (f?.nonce ?? 0) + 1 }));
+  }, []);
+
+  const openViewer = useCallback((list: PhotoPoint[], index: number) => {
+    setViewer({ photos: list, index });
+    setSelectedId(list[index]?.id ?? null);
+  }, []);
+
+  const closeSheet = useCallback(() => {
+    setSheet(null);
+    // 元の実装と同じ。ビューアが開いていないときはシートを閉じると選択も解除する。
+    setSelectedId((id) => (viewer ? id : null));
+  }, [viewer]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (viewer) setViewer(null);
+      else if (sheet) closeSheet();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [viewer, sheet, closeSheet]);
+
+  // 地図側で選んだ写真が一覧の見える位置に来るようにする。
+  useEffect(() => {
+    if (selectedId) document.getElementById(`photo-item-${selectedId}`)?.scrollIntoView({ block: 'nearest' });
+  }, [selectedId]);
 
   if (!region) return <RegionMissing loading={regionsLoading} />;
   const countLabel = String(photos.length).padStart(2, '0');
@@ -191,16 +199,12 @@ function Photomap() {
               type="button"
               onClick={() => setUploadOpen(true)}
               disabled={!canUpload}
-              title={user ? '写真をアップロード' : 'アップロードにはログインが必要です'}
+              title={upload.enabled ? '写真をアップロード' : upload.message}
             >
               <ImagePlus size={16} />
               <span>写真を追加</span>
             </button>
-            {!user && (
-              <p className="upload-hint">
-                {authLoading ? 'ログイン状態を確認中…' : authConfigured ? '写真を追加するには、右上の「ログイン」からGoogleアカウントでログインしてください。' : 'ログインを利用できない設定です（Firebase未設定）。'}
-              </p>
-            )}
+            {!upload.enabled && <p className="upload-hint" role="status">{upload.message}</p>}
             <label className="search-box">
               <Search size={16} aria-hidden="true" />
               <input
@@ -214,12 +218,12 @@ function Photomap() {
             {visiblePhotos.length > 0 ? (
               <ul className="photo-list">
                 {visiblePhotos.map((p) => (
-                  <li key={p.id}>
+                  <li key={p.id} id={`photo-item-${p.id}`}>
                     <button
                       type="button"
                       className={`photo-item${p.id === selectedId ? ' selected' : ''}`}
                       aria-pressed={p.id === selectedId}
-                      onClick={() => setSelectedId(p.id)}
+                      onClick={() => focusPhoto(p.id)}
                     >
                       {p.thumbnailDriveFileId && API_BASE ? (
                         <img
@@ -265,7 +269,7 @@ function Photomap() {
                 <Map
                   defaultCenter={region.defaultCenter}
                   defaultZoom={region.defaultZoom}
-                  mapId={import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || undefined}
+                  mapId={import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || 'DEMO_MAP_ID'}
                   gestureHandling="greedy"
                   disableDefaultUI
                   zoomControl
@@ -273,7 +277,16 @@ function Photomap() {
                   className="google-map"
                 >
                   <RegionViewport center={region.defaultCenter} zoom={region.defaultZoom} />
-                  <PhotoMarkers photos={visiblePhotos} selectedId={selectedId} onSelect={setSelectedId} />
+                  <PhotoLayer
+                    photos={visiblePhotos}
+                    selectedId={selectedId}
+                    focus={focus}
+                    fitKey={region.slug}
+                    thumbnailUrl={thumbnailUrl}
+                    onSelect={setSelectedId}
+                    onOpenViewer={openViewer}
+                    onOpenSheet={setSheet}
+                  />
                 </Map>
               </APIProvider>
             ) : (
@@ -301,7 +314,19 @@ function Photomap() {
           regionName={region.name}
           onClose={() => setUploadOpen(false)}
           // アップロードされた写真はFirestoreの購読で一覧・地図に現れる。選択状態にして地図をそこへ寄せる。
-          onUploaded={setSelectedId}
+          onUploaded={focusPhoto}
+        />
+      )}
+      {/* ビューアを閉じるとシートに戻れるよう、ビューアが開いていてもシートは下に残す。 */}
+      {sheet && <ClusterSheet photos={sheet} thumbnailUrl={thumbnailUrl} onPick={(i) => openViewer(sheet, i)} onClose={closeSheet} />}
+      {viewer && (
+        <PhotoViewer
+          photos={viewer.photos}
+          index={viewer.index}
+          imageUrl={thumbnailUrl}
+          formatDate={formatCaptured}
+          onIndexChange={(index) => openViewer(viewer.photos, index)}
+          onClose={() => setViewer(null)}
         />
       )}
     </main>
